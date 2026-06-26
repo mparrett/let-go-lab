@@ -1,0 +1,15 @@
+# built WASM bundles
+/dist/
+
+# local TLS certs (generate your own — see CLAUDE.md; this repo ships none)
+/certs/
+
+# throwaway scratch (probes, screenshots, one-offs)
+/scratch/
+
+# local lg checkout symlink — machine-specific (create your own, or set LETGO);
+# kept out of the tree so it neither breaks on clone nor leaks a local layout
+/let-go
+
+# OS / editor cruft
+.DS_Store
