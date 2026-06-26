@@ -92,6 +92,9 @@ if [[ "$HTTPS" == "1" ]] && find_certs; then
 else
   [[ "$HTTPS" == "1" ]] && echo "==> no cert in \${XDG_DATA_HOME:-~/.local/share}/let-go-lab/ or certs/ — localhost HTTP only"
   echo "==> HTTP serve on localhost:${PORT} (LAN unreachable — SharedArrayBuffer needs a secure context):"
-  print_urls http
-  exec npx --yes serve@latest "$DIST" -l "$PORT"
+  echo "    http://localhost:${PORT}/"
+  # Bind localhost-only: a bare port binds 0.0.0.0, which would expose insecure
+  # HTTP on the LAN — an origin that isn't cross-origin isolated, so the demo
+  # can't run there anyway. tcp://localhost keeps the fallback to its one job.
+  exec npx --yes serve@latest "$DIST" -l "tcp://localhost:$PORT"
 fi
