@@ -40,6 +40,14 @@
 (def HEIGHT (* CH SCALE))  ; on-screen image height in sixel px (300) — MUST be mult of 6
 (def NPAL 64)              ; palette size; registers 1..NPAL, 0 = interior black
 
+;; --- Text layout. The sixel image is emitted starting at cell row IMG-ROW0,
+;; with CHROME-ROWS of text around it: 4 above (3 status + 1 blank) and 3 below
+;; (1 blank + 2 timing). CHROME-ROWS matches shell.html's CHROME_ROWS, so the
+;; image's cell-span = (terminal rows − CHROME-ROWS) tracks the on-screen image
+;; in the content-sized browser layout. Used by render and click->center.
+(def IMG-ROW0 5)
+(def CHROME-ROWS 7)
+
 ;; ITERATION LEVER (live, bound to ',' / '.'): more iterations = deeper boundary
 ;; detail but slower (cost ~linear in average iteration count). Carried through
 ;; the interaction loop; home-maxiter is the reset value.
@@ -223,7 +231,7 @@
     ;; dimmed for the whole ~emit and then pops. The dim covers only the compute
     ;; stall; the reveal is bright.
     (computing-cue false)
-    (term/move-cursor 1 5)                ; (col row): rows 1-3 status, row 4 blank, image row 5
+    (term/move-cursor 1 IMG-ROW0)         ; (col row): rows 1-3 status, row 4 blank, image at IMG-ROW0
     (term/write (str ESC "Pq" "\"1;1;" WIDTH ";" HEIGHT palette-defs))
     (loop [b 0]
       (when (< b (quot HEIGHT 6))
@@ -283,19 +291,26 @@
 
 (defn clamp01 [v] (max 0.0 (min 1.0 v)))
 
-;; Map a click at cell (mx,my) to a complex point in the current view, then
-;; recenter there. The image starts at cell (col 1, row 3) and fills ~the whole
-;; width (cols) and ~rows-4 rows (status + blank + bottom bar). Cell-granular
-;; and approximate — fine for tap-to-zoom.
+;; Map a click at cell (mx,my) to a complex point in the current view and
+;; recenter there — but ONLY for clicks landing on the image (rows IMG-ROW0 ..
+;; bottom). Returns [cx' cy'] or nil; the caller ignores nil, so taps on the
+;; status/timing rows don't trigger a clamped edge zoom. Vertical normalizes
+;; against the image's cell-span (rows − CHROME-ROWS) starting at IMG-ROW0.
+;; Horizontal uses the full width: in the content-sized browser layout the image
+;; fills the columns; in a wider native terminal a right-of-image click clamps,
+;; which is acceptable for tap-to-zoom. Cell-granular and approximate.
 (defn click->center [cx cy vw mx my]
   (let [sz (term/size)
         cols (if sz (nth sz 0) 80)
         rows (if sz (nth sz 1) 24)
-        vh (* vw (/ (float CH) (float CW)))
-        fx (clamp01 (/ (float (- mx 1)) (float cols)))
-        fy (clamp01 (/ (float (- my 3)) (float (max 1 (- rows 4)))))]
-    [(+ (- cx (/ vw 2.0)) (* fx vw))
-     (+ (- cy (/ vh 2.0)) (* fy vh))]))
+        img-rows (max 1 (- rows CHROME-ROWS))
+        img-bot (+ IMG-ROW0 img-rows -1)]
+    (when (and (>= my IMG-ROW0) (<= my img-bot))
+      (let [vh (* vw (/ (float CH) (float CW)))
+            fx (clamp01 (/ (float (- mx 1)) (float cols)))
+            fy (clamp01 (/ (float (- my IMG-ROW0)) (float img-rows)))]
+        [(+ (- cx (/ vw 2.0)) (* fx vw))
+         (+ (- cy (/ vh 2.0)) (* fy vh))]))))
 
 (defn loop-keys []
   (loop [cx home-x cy home-y vw home-w mi home-maxiter]
@@ -318,7 +333,9 @@
         (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi)
         (and me (= (:action me) :press) (= (:button me) :left))
         (let [c (click->center cx cy vw (:x me) (:y me))]
-          (recur (first c) (second c) (* vw 0.7) mi))
+          (if c
+            (recur (first c) (second c) (* vw 0.7) mi)
+            (recur cx cy vw mi)))               ; click outside the image — ignore
         (= k "q") nil
         :else (recur cx cy vw mi)))))
 
