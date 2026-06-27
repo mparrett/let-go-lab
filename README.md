@@ -3,6 +3,8 @@
 Experiments on [let-go](https://github.com/nooga/let-go) — sixel graphics,
 terminal UI, wasm-in-the-browser — decoupled from any one client app.
 
+![Mandelbrot sixel demo running in the browser via xterm.js](docs/img/mandelbrot-browser.png)
+
 ## Quick start
 
 ```sh
@@ -22,4 +24,10 @@ LAN/phone serving, and how to add a demo.
   and a single-pass sixel encoder.
 
   Controls: `+/-` zoom · `hjkl` / arrows pan · `,/.` maxiter · `r` reset ·
-  `q` quit · tap/click to recenter · wheel to zoom.
+  `q` quit · wheel to zoom. In the browser, click to recenter+zoom (shift+click
+  to zoom out); natively the terminal's image geometry isn't measurable, so use
+  the keyboard there.
+
+  The same `.lg` runs natively in any sixel-capable terminal (`just play`):
+
+  ![Mandelbrot demo zoomed in, running natively in iTerm2](docs/img/mandelbrot-native-zoom.png)

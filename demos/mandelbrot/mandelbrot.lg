@@ -30,23 +30,24 @@
 ;; only CW·CH points are iterated. Cost ∝ 1/SCALE²: SCALE=2 is ~4× faster than
 ;; SCALE=1 for the same display size, at the cost of blockier detail. MAXITER
 ;; is the other lever — cost scales ~linearly with the average iteration count.
-(def SCALE 3)              ; sixel-pixel size of one computed pixel — also the
-                           ; on-screen SIZE knob: bigger SCALE = bigger image at
-                           ; the SAME compute (just chunkier). 3 → 390px wide,
-                           ; ~fills a phone; drop to 2 for a smaller/sharper image.
-(def CW 130)              ; coarse grid width  in computed px
-(def CH 100)              ; coarse grid height in computed px — CH×SCALE must be mult of 6
-(def WIDTH (* CW SCALE))   ; on-screen image width  in sixel px (390)
-(def HEIGHT (* CH SCALE))  ; on-screen image height in sixel px (300) — MUST be mult of 6
+(def SCALE 3)              ; sixel-pixel size of one computed pixel — bigger SCALE =
+                           ; bigger image at the SAME compute (just chunkier). For
+                           ; bigger AND sharper, raise CW/CH instead (costs compute).
+(def CW 160)              ; coarse grid width  in computed px
+(def CH 120)              ; coarse grid height in computed px — CH×SCALE must be mult of 6
+(def WIDTH (* CW SCALE))   ; on-screen image width  in sixel px (480)
+(def HEIGHT (* CH SCALE))  ; on-screen image height in sixel px (360) — MUST be mult of 6
 (def NPAL 64)              ; palette size; registers 1..NPAL, 0 = interior black
 
-;; --- Text layout. The sixel image is emitted starting at cell row IMG-ROW0,
-;; with CHROME-ROWS of text around it: 4 above (3 status + 1 blank) and 3 below
-;; (1 blank + 2 timing). CHROME-ROWS matches shell.html's CHROME_ROWS, so the
-;; image's cell-span = (terminal rows − CHROME-ROWS) tracks the on-screen image
-;; in the content-sized browser layout. Used by render and click->center.
-(def IMG-ROW0 5)
-(def CHROME-ROWS 7)
+;; --- Text layout. A 1-col left margin (COL0) and 1-row top margin keep the UI
+;; off the terminal's corner. The sixel image is emitted at col COL0, row IMG-ROW0,
+;; with CHROME-ROWS of text around it: 5 above (1 top margin + 3 status + 1 blank)
+;; and 3 below (1 blank + 2 timing). CHROME-ROWS matches shell.html's CHROME_ROWS,
+;; so the image's cell-span = (terminal rows − CHROME-ROWS) in the content-sized
+;; browser layout. Used by render and click->center.
+(def COL0 2)               ; left margin: content starts at column 2
+(def IMG-ROW0 6)           ; image top row (1 top margin + 3 status + 1 blank)
+(def CHROME-ROWS 8)
 
 ;; ITERATION LEVER (live, bound to ',' / '.'): more iterations = deeper boundary
 ;; detail but slower (cost ~linear in average iteration count). Carried through
@@ -175,24 +176,29 @@
 ;; ~46-col phone, and the coords get their own row so deep-zoom values don't
 ;; collide with the controls.
 (defn status [cx cy vw]
-  (term/move-cursor 1 1)
+  (term/move-cursor COL0 2)
   (term/write "mandelbrot · sixel · let-go        ")
-  (term/move-cursor 1 2)
+  (term/move-cursor COL0 3)
   (term/write (str "x=" (r5 cx) " y=" (r5 cy) " zoom=" (int (/ home-w vw)) "x        "))
-  (term/move-cursor 1 3)
+  (term/move-cursor COL0 4)
   (term/write "tap · +/- · hjkl · ,. · r · q        "))
 
-;; Bottom bar: split phase timing + the live params, the triage signal for
-;; "which phase dominates" (compute = VM arithmetic/dispatch; emit = the sixel
-;; encoder — subs/nth/conj). Pinned to the terminal's last row (via term/size)
-;; so it sits at the screen bottom. NB: move-cursor is (col row), not (row col).
+;; Bottom bar: split phase timing + the live params (the triage signal for
+;; "which phase dominates" — compute = VM arithmetic/dispatch; emit = the sixel
+;; encoder). Written at the cursor the sixel image left just below itself: both
+;; iTerm2 and xterm advance the cursor past a sixel, so the bar tracks the
+;; fractal. (It used to pin to the terminal's last rows via term/size, which
+;; floats far below the image in a tall window.) Leading \r\n = one blank gap row.
+;; Erase cursor→end-of-line: clears a previous longer value WITHOUT adding width.
+;; (Trailing-space padding would wrap past the narrow terminal and eat a row,
+;; which absolute positioning hid but this relative write doesn't.)
+(def CLEAR-EOL (str ESC "[K"))
+;; The leading space on each line is the COL0 left margin (the \r returns to col 1).
 (defn bottom-status [mi iters compute-ms emit-ms]
-  (let [sz (term/size)
-        rows (max (if sz (nth sz 1) 24) 16)]   ; guard a bogus/unfitted size
-    (term/move-cursor 1 (dec rows))            ; timing on the second-to-last row,
-    (term/write (str "compute " compute-ms "ms · emit " emit-ms "ms · iters " iters "        "))
-    (term/move-cursor 1 rows)                  ; params on the last — two short lines
-    (term/write (str "maxiter " mi " · grid " CW "×" CH " ·" SCALE "x        "))))
+  (term/write (str "\r\n "
+                   "compute " compute-ms "ms · emit " emit-ms "ms · iters " iters CLEAR-EOL
+                   "\r\n "
+                   "maxiter " mi " · grid " CW "×" CH " ·" SCALE "x" CLEAR-EOL)))
 
 ;; Encode a whole frame to one sixel string WITHOUT writing it — the encode
 ;; path in isolation (used by the headless bench so a profile of compute+encode
@@ -218,7 +224,7 @@
   ;; and the un-dim below pops it bright. The flush is posted to the main thread
   ;; and painted while the worker blocks in compute-grid.
   (computing-cue true)
-  (term/move-cursor 1 2)
+  (term/move-cursor COL0 3)               ; coords row (status row 2)
   (term/write "computing…                          ")
   (term/flush)
   (let [t0 (inst-ms (now))
@@ -231,7 +237,7 @@
     ;; dimmed for the whole ~emit and then pops. The dim covers only the compute
     ;; stall; the reveal is bright.
     (computing-cue false)
-    (term/move-cursor 1 IMG-ROW0)         ; (col row): rows 1-3 status, row 4 blank, image at IMG-ROW0
+    (term/move-cursor COL0 IMG-ROW0)      ; image at (COL0, IMG-ROW0) — left + top margin
     (term/write (str ESC "Pq" "\"1;1;" WIDTH ";" HEIGHT palette-defs))
     (loop [b 0]
       (when (< b (quot HEIGHT 6))
@@ -239,9 +245,17 @@
         (term/flush)                      ; stream each band as it finishes
         (recur (inc b))))
     (term/write (str ESC "\\"))
-    ;; Status last, so it overwrites the "computing…" marker on the coords row.
-    (status cx cy vw)
+    ;; Erase from here (the cursor the sixel left just below the image) to the end
+    ;; of the screen, THEN write the bar. Clears any stale bottom bar a prior frame
+    ;; stranded — iTerm2's cursor-after-sixel isn't perfectly stable, so without
+    ;; this the relative bar can ghost. Harmless in xterm (clears the rows the bar
+    ;; reoccupies anyway).
+    (term/write (str ESC "[J"))
+    ;; bottom-status FIRST — it writes at the cursor just below the image
+    ;; (relative). status SECOND/last, so it still overwrites the "computing…"
+    ;; marker on the coords row up top.
     (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1))
+    (status cx cy vw)
     (term/flush)))
 
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
@@ -269,13 +283,25 @@
   (term/flush)
   (term/restore-mode!))    ; no-op in wasm
 
-;; Decode an SGR mouse report "ESC[<b;x;y(M|m)" → {:action :button :x :y} or nil
-;; (read-key yields one event per call, so k is exactly one report). This is the
-;; "Phase 3" decode term_wasm.go notes read-key doesn't do yet; the map shape
-;; ({:action :press|:release :button :left|… :x :y}, 1-based cell coords) is the
-;; obvious one, so it could move into read-key upstream unchanged.
+;; Normalize one read-key result to a mouse event {:action :button :x :y …} or nil.
+;; read-key reports a mouse event two ways: NATIVE (#313 hybrid) returns a decoded
+;; map {:type :mouse :action … :button … :x :y :mods …} directly; WASM returns the
+;; raw SGR string "ESC[<b;x;y(M|m)" (its in-runtime decode is "Phase 3, not done").
+;; The map? branch MUST come first — running subs/count on the native map (as an
+;; earlier version did) throws, which on a TTY crashes mid-loop and leaves mouse
+;; reporting on, leaking raw reports to the shell.
+;; :native marks how the event was delivered, which also tells us whether we can
+;; map a click to image coordinates: a MAP means native read-key (#313 hybrid) —
+;; a real terminal we CANNOT measure (cursor/pixel/cell queries are swallowed by
+;; tmux), so click→complex mapping isn't trustworthy there. A STRING means wasm,
+;; where the browser shell content-sizes the terminal, so the image's cell-span
+;; IS known (= rows − CHROME-ROWS) and the mapping is exact. loop-keys uses this.
 (defn mouse-event [k]
-  (when (and (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
+  (cond
+    (map? k) (when (= (:type k) :mouse)
+               (assoc k :native true
+                        :shift (and (:mods k) (contains? (:mods k) :shift) true)))
+    (and (string? k) (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
     (let [n (count k)
           parts (string/split (subs k 3 (dec n)) ";")]
       (when (= (count parts) 3)
@@ -287,27 +313,32 @@
                      (= (bit-and b 3) 1) :middle
                      :else :right)
            :x (parse-int (nth parts 1))
-           :y (parse-int (nth parts 2))})))))
+           :y (parse-int (nth parts 2))
+           :native false
+           :shift (> (bit-and b 4) 0)})))     ; SGR button byte: bit 2 = Shift
+    :else nil))
 
 (defn clamp01 [v] (max 0.0 (min 1.0 v)))
 
-;; Map a click at cell (mx,my) to a complex point in the current view and
-;; recenter there — but ONLY for clicks landing on the image (rows IMG-ROW0 ..
-;; bottom). Returns [cx' cy'] or nil; the caller ignores nil, so taps on the
-;; status/timing rows don't trigger a clamped edge zoom. Vertical normalizes
-;; against the image's cell-span (rows − CHROME-ROWS) starting at IMG-ROW0.
-;; Horizontal uses the full width: in the content-sized browser layout the image
-;; fills the columns; in a wider native terminal a right-of-image click clamps,
-;; which is acceptable for tap-to-zoom. Cell-granular and approximate.
+;; Map a click at cell (mx,my) to a complex point in the current view and recenter
+;; there. BROWSER-ONLY: the caller gates this on a non-native event, because only
+;; the content-sized browser shell makes the image's cell extent known exactly —
+;; image is cols−(COL0−1) wide starting at COL0, and rows−CHROME-ROWS tall starting
+;; at IMG-ROW0 (the shell sizes the terminal to image+chrome). Returns [cx' cy'] or
+;; nil for clicks outside the image, so the caller ignores taps on the status/
+;; timing rows or the margins (no clamped edge zoom). Cell-granular, approximate.
 (defn click->center [cx cy vw mx my]
   (let [sz (term/size)
         cols (if sz (nth sz 0) 80)
         rows (if sz (nth sz 1) 24)
+        img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
         img-rows (max 1 (- rows CHROME-ROWS))
+        img-right (+ COL0 img-cols -1)
         img-bot (+ IMG-ROW0 img-rows -1)]
-    (when (and (>= my IMG-ROW0) (<= my img-bot))
+    (when (and (>= mx COL0) (<= mx img-right)
+               (>= my IMG-ROW0) (<= my img-bot))
       (let [vh (* vw (/ (float CH) (float CW)))
-            fx (clamp01 (/ (float (- mx 1)) (float cols)))
+            fx (clamp01 (/ (float (- mx COL0)) (float img-cols)))
             fy (clamp01 (/ (float (- my IMG-ROW0)) (float img-rows)))]
         [(+ (- cx (/ vw 2.0)) (* fx vw))
          (+ (- cy (/ vh 2.0)) (* fy vh))]))))
@@ -328,13 +359,17 @@
         (= k ".") (recur cx cy vw (min mi-max (+ mi mi-step)))   ; more detail, slower
         (= k ",") (recur cx cy vw (max mi-min (- mi mi-step)))   ; less detail, faster
         (= k "r") (recur home-x home-y home-w home-maxiter)
-        ;; mouse: wheel zooms (desktop); tap / left-press recenters + zooms in
+        ;; Wheel zooms (position-independent → works everywhere, both targets).
         (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi)
         (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi)
-        (and me (= (:action me) :press) (= (:button me) :left))
-        (let [c (click->center cx cy vw (:x me) (:y me))]
+        ;; Left-press recenters + zooms IN (shift = OUT), but ONLY in the browser:
+        ;; native (:native true) can't be measured, so a click would map to the
+        ;; wrong point. There, click is ignored — keyboard pan/zoom is the path.
+        (and me (= (:action me) :press) (= (:button me) :left) (not (:native me)))
+        (let [c (click->center cx cy vw (:x me) (:y me))
+              vw' (if (:shift me) (/ vw 0.7) (* vw 0.7))]
           (if c
-            (recur (first c) (second c) (* vw 0.7) mi)
+            (recur (first c) (second c) vw' mi)
             (recur cx cy vw mi)))               ; click outside the image — ignore
         (= k "q") nil
         :else (recur cx cy vw mi)))))
