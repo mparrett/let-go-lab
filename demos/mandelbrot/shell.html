@@ -1,0 +1,108 @@
+<!--
+  Client-owned shell for the mandelbrot demo, bound to let-go ONLY through
+  window.LetGoHost (onReady/onOutput/sendInput/setSize). Adds @xterm/addon-image
+  so raw sixel DCS strings written by the .lg program (via term/write) decode to
+  pixels. Content-sized to the image; baked into the bundle by inject-shell.sh.
+
+  To adapt for a new demo: copy this file, change IMAGE_W/IMAGE_H/CHROME_ROWS to
+  match your program's image size and status rows.
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-image@0.8.0/lib/addon-image.min.js"></script>
+<style>
+  html, body { background: #000; margin: 0; height: 100%; }
+  /* Content-sized terminal box (relayout sizes it to the image + text rows),
+     horizontally centered. Vertically: TOP on portrait/mobile (black fills
+     below), CENTERED on landscape/desktop (letterbox). Overrides the lg host's
+     body{flex-direction:column} #terminal{flex:1} (which would fill the screen). */
+  body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
+  @media (orientation: landscape) { body { justify-content: center; } }
+  /* transition eases the pop-to-bright when a freshly computed frame lands */
+  #terminal { flex: 0 0 auto; transition: filter 0.15s ease-out; }
+</style>
+<script>
+  (function () {
+    const term = new Terminal({
+      fontFamily: '"IBM Plex Mono", Menlo, Consolas, monospace',
+      fontSize: 14,
+      theme: { background: '#000', foreground: '#cfcfcf', cursor: '#000' },
+      allowProposedApi: true,   // required by addon-image
+      convertEol: true,
+      scrollback: 0,            // a single full-screen image; no history to scroll
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+
+    // Sixel decoder. pixelLimit bumped well past the default so a full-window
+    // render isn't truncated. sixelSupport defaults true; spelled out for intent.
+    const image = new ImageAddon.ImageAddon({
+      sixelSupport: true,
+      pixelLimit: 4096 * 4096,
+      sixelSizeLimit: 25_000_000,   // bytes per DCS string; our frames are large
+    });
+    term.loadAddon(image);
+
+    // The image's pixel size = CW*SCALE × CH*SCALE in mandelbrot.lg. The terminal
+    // is sized to wrap the image + 3 header rows + blank + 2 timing rows, so the
+    // box is content-sized (timing sits right under the fractal) and the flex
+    // parent can center/letterbox it.
+    const IMAGE_W = 390, IMAGE_H = 300, CHROME_ROWS = 7;
+    function cellDims() {
+      try {
+        const d = term._core._renderService.dimensions.css.cell;
+        if (d && d.width && d.height) return { w: d.width, h: d.height };
+      } catch (_) {}
+      const f = term.options.fontSize;
+      return { w: 0.6 * f, h: 1.2 * f };
+    }
+
+    let pending;
+    function relayout() {
+      const termEl = document.getElementById("terminal");
+      termEl.style.width = "100vw";
+      termEl.style.height = "100vh";          // full viewport so fit() seeds cell metrics
+      fit.fit();
+      const cell = cellDims();
+      // content size, but never larger than the viewport (else it overflows/clips)
+      const cols = Math.min(term.cols, Math.ceil(IMAGE_W / cell.w));
+      const rows = Math.min(term.rows, Math.ceil(IMAGE_H / cell.h) + CHROME_ROWS);
+      term.resize(cols, rows);
+      termEl.style.width = Math.ceil(cell.w * cols) + "px";
+      termEl.style.height = Math.ceil(cell.h * rows) + "px";
+      if (window.LetGoHost && window.LetGoHost.setSize) window.LetGoHost.setSize(cols, rows);
+      window.__lgGrid = cols + "x" + rows;
+    }
+    function scheduleRelayout() { clearTimeout(pending); pending = setTimeout(relayout, 100); }
+
+    window.LetGoHost.onReady((mode) => {
+      const statusEl = document.getElementById("status");
+      if (statusEl) statusEl.style.display = "none";
+      const termEl = document.getElementById("terminal");
+      termEl.style.display = "block";
+      term.open(termEl);
+      relayout();
+      term.focus();
+      // Private OSC 5000;{0|1} BEL toggles a "computing" dim cue on the whole
+      // terminal box (the .lg emits it around the compute stall — see
+      // mandelbrot.lg). Strip it before term.write so xterm never sees it;
+      // native terminals ignore the unknown OSC, so the same .lg drives both.
+      window.LetGoHost.onOutput((s) => {
+        s = s.replace(/\x1b\]5000;([01])\x07/g, (_m, v) => {
+          termEl.style.filter = v === "1" ? "saturate(0.35) brightness(0.5)" : "";
+          return "";
+        });
+        term.write(s);
+      });
+      if (mode === "worker") {
+        term.onResize(({ cols, rows }) => window.LetGoHost.setSize(cols, rows));
+        term.onData((d) => window.LetGoHost.sendInput(d));
+      }
+    });
+
+    window.addEventListener("resize", scheduleRelayout);
+    window.addEventListener("orientationchange", scheduleRelayout);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleRelayout);
+  })();
+</script>

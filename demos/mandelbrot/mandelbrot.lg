@@ -1,0 +1,380 @@
+;; mandelbrot.lg — standalone let-go WASM demo: an escape-time Mandelbrot set
+;; rendered as sixel graphics inside xterm.js (via @xterm/addon-image, loaded
+;; by dev/shell-sixel.html). No <canvas>, no WebGL — the image is a sixel DCS
+;; string the VM prints with term/write, decoded by the terminal.
+;;
+;; Pipeline: (term/write s) -> *out* -> HostWriter -> LetGoHost.onOutput ->
+;; xterm term.write(s) -> addon-image decodes the sixel DCS.
+;;
+;; Sixel encoding (one DCS per frame):
+;;   ESC P q          introducer
+;;   "1;1;W;H         raster attributes (1:1 pixel aspect, W x H pixels)
+;;   #n;2;r;g;b       define palette register n as RGB, components 0..100
+;;   #n <data> $      select register n, lay down a 6px-tall band row, CR
+;;   -                advance to the next 6px band
+;;   ESC \            string terminator
+;; Each data char encodes a 1px-wide, 6px-tall column: value (char-63) is a
+;; bitmask, bit r = pixel in sub-row r lit. Runs collapse to !<count><char>.
+
+(ns mandelbrot
+  (:require [term]
+            [math]
+            [string]))
+
+(def ESC "")
+
+;; --- Render parameters ---------------------------------------------------
+;; SPEED LEVER: the cost is one escape() call per *computed* pixel. We compute
+;; a coarse CW×CH grid, then upscale each computed pixel into a SCALE×SCALE
+;; block of sixel pixels — so the on-screen image is (CW·SCALE)×(CH·SCALE) but
+;; only CW·CH points are iterated. Cost ∝ 1/SCALE²: SCALE=2 is ~4× faster than
+;; SCALE=1 for the same display size, at the cost of blockier detail. MAXITER
+;; is the other lever — cost scales ~linearly with the average iteration count.
+(def SCALE 3)              ; sixel-pixel size of one computed pixel — also the
+                           ; on-screen SIZE knob: bigger SCALE = bigger image at
+                           ; the SAME compute (just chunkier). 3 → 390px wide,
+                           ; ~fills a phone; drop to 2 for a smaller/sharper image.
+(def CW 130)              ; coarse grid width  in computed px
+(def CH 100)              ; coarse grid height in computed px — CH×SCALE must be mult of 6
+(def WIDTH (* CW SCALE))   ; on-screen image width  in sixel px (390)
+(def HEIGHT (* CH SCALE))  ; on-screen image height in sixel px (300) — MUST be mult of 6
+(def NPAL 64)              ; palette size; registers 1..NPAL, 0 = interior black
+
+;; --- Text layout. The sixel image is emitted starting at cell row IMG-ROW0,
+;; with CHROME-ROWS of text around it: 4 above (3 status + 1 blank) and 3 below
+;; (1 blank + 2 timing). CHROME-ROWS matches shell.html's CHROME_ROWS, so the
+;; image's cell-span = (terminal rows − CHROME-ROWS) tracks the on-screen image
+;; in the content-sized browser layout. Used by render and click->center.
+(def IMG-ROW0 5)
+(def CHROME-ROWS 7)
+
+;; ITERATION LEVER (live, bound to ',' / '.'): more iterations = deeper boundary
+;; detail but slower (cost ~linear in average iteration count). Carried through
+;; the interaction loop; home-maxiter is the reset value.
+(def home-maxiter 96)
+(def mi-step 16)
+(def mi-min 16)
+(def mi-max 1024)
+
+;; --- Default view (region of the complex plane). The live view is carried
+;; through the interaction loop; these are just the reset point. ------------
+(def home-x -0.6)
+(def home-y 0.0)
+(def home-w 3.2)
+
+;; --- Sixel data chars: index m (0..63) -> the char (m+63), as a 1-char str.
+(def sixchars
+  (apply str (map (fn [i] (char (+ 63 i))) (range 64))))
+(defn sixchar [m] (subs sixchars m (inc m)))
+
+;; --- Palette: IQ-style cosine gradient, each component in 0..100 ----------
+(defn iq [t phase]
+  (int (+ 50.0 (* 50.0 (math/cos (* 6.2831853 (+ t phase)))))))
+
+(def palette-defs
+  (loop [i 0 acc (str "#0;2;0;0;0")]          ; register 0 = black (interior)
+    (if (>= i NPAL)
+      acc
+      (let [t (/ (float i) (float NPAL))
+            n (inc i)]
+        (recur (inc i)
+               (str acc "#" n ";2;" (iq t 0.0) ";" (iq t 0.33) ";" (iq t 0.67)))))))
+
+;; --- Escape-time iteration: returns iters (0..mi), mi = interior.
+(defn escape [cx cy mi]
+  (loop [zx 0.0 zy 0.0 i 0]
+    (let [zx2 (* zx zx)
+          zy2 (* zy zy)]
+      (if (or (>= i mi) (> (+ zx2 zy2) 4.0))
+        i
+        (recur (+ (- zx2 zy2) cx)
+               (+ (* 2.0 (* zx zy)) cy)
+               (inc i))))))
+
+;; Multiply before the mod so colors cycle several times across the escape
+;; range — vivid contour bands instead of one washed-out ramp.
+(defn color-index [iters mi]
+  (if (>= iters mi) 0 (inc (mod (* iters 4) NPAL))))
+
+;; --- Coarse palette grid: CW×CH color indices (row-major, coarse pixel
+;; (i,j) at j*CW + i), computed once per frame. This is the expensive part —
+;; CW·CH escape() calls. Returns [grid total-iters]; the iter sum (threaded,
+;; not via an atom, so it doesn't distort timing) is the VM-throughput
+;; numerator (iters/sec). `left`/`top`/`cstep` describe the current view.
+(defn compute-grid [cx cy vw mi]
+  (let [cstep (/ vw (float CW))
+        left  (- cx (/ vw 2.0))
+        top   (- cy (/ (* cstep (float CH)) 2.0))]
+    (loop [j 0 acc [] sum 0]
+      (if (>= j CH)
+        [acc sum]
+        (let [im (+ top (* (float j) cstep))
+              row (loop [i 0 a acc s sum]
+                    (if (>= i CW)
+                      [a s]
+                      (let [it (escape (+ left (* (float i) cstep)) im mi)]
+                        (recur (inc i) (conj a (color-index it mi)) (+ s it)))))]
+          (recur (inc j) (first row) (second row)))))))
+
+;; Coarse-grid index for a display sub-row gy and display column gx (each /SCALE).
+(defn grid-at [grid gx gy]
+  (nth grid (+ (* (quot gy SCALE) CW) (quot gx SCALE))))
+
+(defn emit-run [acc ch len]
+  (cond
+    (<= len 0) acc
+    (>= len 4) (conj acc "!" (str len) ch)
+    :else (conj acc (apply str (repeat len ch)))))
+
+;; RLE one color's full row (a vector of WIDTH masks) into a sixel string.
+(defn rle-row [row]
+  (loop [gx 0 cur "" run 0 acc []]
+    (if (>= gx WIDTH)
+      (apply str (emit-run acc cur run))
+      (let [ch (sixchar (nth row gx))]
+        (if (= ch cur)
+          (recur (inc gx) cur (inc run) acc)
+          (recur (inc gx) ch 1 (emit-run acc cur run)))))))
+
+;; One 6px display band, SINGLE PASS: read each of the band's 6×WIDTH cells once
+;; and route each cell's bit into its color's transient row buffer, then RLE each
+;; row. The multi-pass predecessor re-read every cell once per color (~16× on a
+;; ~15-colour band); this touches each cell once. Color iteration order differs
+;; from a set scan, but per-color rows and total bytes are identical (each pixel
+;; has exactly one colour; overlay is commutative). See the workspace perf note.
+(defn encode-band [grid b]
+  (let [y0 (* b 6)
+        rows (loop [gx 0 rws (transient {})]
+               (if (>= gx WIDTH)
+                 rws
+                 (recur (inc gx)
+                   (loop [r 0 m rws]
+                     (if (>= r 6)
+                       m
+                       (let [c   (grid-at grid gx (+ y0 r))
+                             bit (bit-shift-left 1 r)
+                             tv  (or (get m c) (transient (vec (repeat WIDTH 0))))
+                             tv  (assoc! tv gx (bit-or (nth tv gx) bit))]
+                         (recur (inc r) (assoc! m c tv))))))))
+        prows (persistent! rows)
+        pieces (loop [cs (seq prows) acc []]
+                 (if (empty? cs)
+                   acc
+                   (let [e (first cs)]
+                     (recur (rest cs)
+                            (conj acc "#" (str (first e)) (rle-row (persistent! (second e))) "$")))))]
+    (str (apply str pieces) "-")))
+
+;; Kept short enough to stay on one line at the fitted terminal width — a
+;; longer line wraps and litters row 2 (where the image starts).
+;; Round for DISPLAY only (the live cx/cy keep full precision) — a recenter from
+;; a tap yields long floats that otherwise blow up the status line.
+(defn r5 [v] (/ (float (int (* v 100000.0))) 100000.0))
+
+;; Three short rows (title, coords, controls) above the image — none wraps on a
+;; ~46-col phone, and the coords get their own row so deep-zoom values don't
+;; collide with the controls.
+(defn status [cx cy vw]
+  (term/move-cursor 1 1)
+  (term/write "mandelbrot · sixel · let-go        ")
+  (term/move-cursor 1 2)
+  (term/write (str "x=" (r5 cx) " y=" (r5 cy) " zoom=" (int (/ home-w vw)) "x        "))
+  (term/move-cursor 1 3)
+  (term/write "tap · +/- · hjkl · ,. · r · q        "))
+
+;; Bottom bar: split phase timing + the live params, the triage signal for
+;; "which phase dominates" (compute = VM arithmetic/dispatch; emit = the sixel
+;; encoder — subs/nth/conj). Pinned to the terminal's last row (via term/size)
+;; so it sits at the screen bottom. NB: move-cursor is (col row), not (row col).
+(defn bottom-status [mi iters compute-ms emit-ms]
+  (let [sz (term/size)
+        rows (max (if sz (nth sz 1) 24) 16)]   ; guard a bogus/unfitted size
+    (term/move-cursor 1 (dec rows))            ; timing on the second-to-last row,
+    (term/write (str "compute " compute-ms "ms · emit " emit-ms "ms · iters " iters "        "))
+    (term/move-cursor 1 rows)                  ; params on the last — two short lines
+    (term/write (str "maxiter " mi " · grid " CW "×" CH " ·" SCALE "x        "))))
+
+;; Encode a whole frame to one sixel string WITHOUT writing it — the encode
+;; path in isolation (used by the headless bench so a profile of compute+encode
+;; isn't muddied by the IO/transport phase).
+(defn build-frame [grid]
+  (loop [b 0 acc [(str ESC "Pq" "\"1;1;" WIDTH ";" HEIGHT palette-defs)]]
+    (if (>= b (quot HEIGHT 6))
+      (apply str (conj acc (str ESC "\\")))
+      (recur (inc b) (conj acc (encode-band grid b))))))
+
+;; Private OSC the browser shell (dev/shell-sixel.html) watches to dim the whole
+;; terminal while a frame computes, then pop it bright when the new image lands.
+;; Native terminals ignore an unknown OSC, so the same code drives TTY and wasm.
+(defn computing-cue [on]
+  (term/write (str ESC "]5000;" (if on "1" "0") (char 7))))
+
+(defn render [cx cy vw mi]
+  (term/hide-cursor)
+  ;; No per-frame clear: the previous fractal stays on screen through the (slow)
+  ;; compute so the screen never blanks. We dim it (shell-side, via computing-cue)
+  ;; and flag "computing…" on the coords row; when ready, the new image (same
+  ;; size/position) paints over the old one, the status rows overwrite in place,
+  ;; and the un-dim below pops it bright. The flush is posted to the main thread
+  ;; and painted while the worker blocks in compute-grid.
+  (computing-cue true)
+  (term/move-cursor 1 2)
+  (term/write "computing…                          ")
+  (term/flush)
+  (let [t0 (inst-ms (now))
+        gi (compute-grid cx cy vw mi)
+        grid (first gi)
+        iters (second gi)
+        t1 (inst-ms (now))]
+    ;; Un-dim as the new frame STARTS painting (batched with the first band's
+    ;; flush below), not after it finishes — otherwise the new fractal paints
+    ;; dimmed for the whole ~emit and then pops. The dim covers only the compute
+    ;; stall; the reveal is bright.
+    (computing-cue false)
+    (term/move-cursor 1 IMG-ROW0)         ; (col row): rows 1-3 status, row 4 blank, image at IMG-ROW0
+    (term/write (str ESC "Pq" "\"1;1;" WIDTH ";" HEIGHT palette-defs))
+    (loop [b 0]
+      (when (< b (quot HEIGHT 6))
+        (term/write (encode-band grid b))
+        (term/flush)                      ; stream each band as it finishes
+        (recur (inc b))))
+    (term/write (str ESC "\\"))
+    ;; Status last, so it overwrites the "computing…" marker on the coords row.
+    (status cx cy vw)
+    (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1))
+    (term/flush)))
+
+;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
+(def up (str ESC "[A"))
+(def down (str ESC "[B"))
+(def right (str ESC "[C"))
+(def left-key (str ESC "[D"))
+
+;; Terminal setup/teardown. All four ops exist in both the native and wasm
+;; term namespaces: natively they enter cbreak input + an own screen buffer;
+;; under wasm raw-mode!/restore-mode! are no-ops and the screen escapes go to
+;; xterm. So the same -main drives a real TTY and the browser shell unchanged.
+(defn setup! []
+  (term/raw-mode!)         ; native: char-at-a-time input (no Enter); wasm: no-op
+  (term/enable-mouse)      ; SGR mouse reporting (\e[?1000;1006h) — xterm/native click→read-key
+  (term/alternate-screen)  ; own the screen; the shell's is restored on exit
+  (term/hide-cursor)
+  (term/clear))            ; clear ONCE; renders overwrite in place (no per-frame blank)
+
+(defn teardown! []
+  (term/show-cursor)
+  (term/reset-style)
+  (term/main-screen)
+  (term/disable-mouse)
+  (term/flush)
+  (term/restore-mode!))    ; no-op in wasm
+
+;; Decode an SGR mouse report "ESC[<b;x;y(M|m)" → {:action :button :x :y} or nil
+;; (read-key yields one event per call, so k is exactly one report). This is the
+;; "Phase 3" decode term_wasm.go notes read-key doesn't do yet; the map shape
+;; ({:action :press|:release :button :left|… :x :y}, 1-based cell coords) is the
+;; obvious one, so it could move into read-key upstream unchanged.
+(defn mouse-event [k]
+  (when (and (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
+    (let [n (count k)
+          parts (string/split (subs k 3 (dec n)) ";")]
+      (when (= (count parts) 3)
+        (let [b (parse-int (nth parts 0))]
+          {:action (if (= (subs k (dec n) n) "M") :press :release)
+           :button (cond
+                     (> (bit-and b 64) 0) (if (= (bit-and b 1) 0) :wheel-up :wheel-down)
+                     (= (bit-and b 3) 0) :left
+                     (= (bit-and b 3) 1) :middle
+                     :else :right)
+           :x (parse-int (nth parts 1))
+           :y (parse-int (nth parts 2))})))))
+
+(defn clamp01 [v] (max 0.0 (min 1.0 v)))
+
+;; Map a click at cell (mx,my) to a complex point in the current view and
+;; recenter there — but ONLY for clicks landing on the image (rows IMG-ROW0 ..
+;; bottom). Returns [cx' cy'] or nil; the caller ignores nil, so taps on the
+;; status/timing rows don't trigger a clamped edge zoom. Vertical normalizes
+;; against the image's cell-span (rows − CHROME-ROWS) starting at IMG-ROW0.
+;; Horizontal uses the full width: in the content-sized browser layout the image
+;; fills the columns; in a wider native terminal a right-of-image click clamps,
+;; which is acceptable for tap-to-zoom. Cell-granular and approximate.
+(defn click->center [cx cy vw mx my]
+  (let [sz (term/size)
+        cols (if sz (nth sz 0) 80)
+        rows (if sz (nth sz 1) 24)
+        img-rows (max 1 (- rows CHROME-ROWS))
+        img-bot (+ IMG-ROW0 img-rows -1)]
+    (when (and (>= my IMG-ROW0) (<= my img-bot))
+      (let [vh (* vw (/ (float CH) (float CW)))
+            fx (clamp01 (/ (float (- mx 1)) (float cols)))
+            fy (clamp01 (/ (float (- my IMG-ROW0)) (float img-rows)))]
+        [(+ (- cx (/ vw 2.0)) (* fx vw))
+         (+ (- cy (/ vh 2.0)) (* fy vh))]))))
+
+(defn loop-keys []
+  (loop [cx home-x cy home-y vw home-w mi home-maxiter]
+    (render cx cy vw mi)
+    (let [k (term/read-key)
+          pan (* vw 0.2)
+          me (mouse-event k)]
+      (cond
+        (or (= k "+") (= k "=")) (recur cx cy (* vw 0.7) mi)
+        (or (= k "-") (= k "_")) (recur cx cy (/ vw 0.7) mi)
+        (or (= k "h") (= k left-key)) (recur (- cx pan) cy vw mi)
+        (or (= k "l") (= k right))    (recur (+ cx pan) cy vw mi)
+        (or (= k "k") (= k up))       (recur cx (- cy pan) vw mi)
+        (or (= k "j") (= k down))     (recur cx (+ cy pan) vw mi)
+        (= k ".") (recur cx cy vw (min mi-max (+ mi mi-step)))   ; more detail, slower
+        (= k ",") (recur cx cy vw (max mi-min (- mi mi-step)))   ; less detail, faster
+        (= k "r") (recur home-x home-y home-w home-maxiter)
+        ;; mouse: wheel zooms (desktop); tap / left-press recenters + zooms in
+        (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi)
+        (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi)
+        (and me (= (:action me) :press) (= (:button me) :left))
+        (let [c (click->center cx cy vw (:x me) (:y me))]
+          (if c
+            (recur (first c) (second c) (* vw 0.7) mi)
+            (recur cx cy vw mi)))               ; click outside the image — ignore
+        (= k "q") nil
+        :else (recur cx cy vw mi)))))
+
+;; Headless bench: render BENCH-FRAMES frames of the fixed home view (no TTY,
+;; no input, no sixel write), printing per-frame compute/encode timing + the
+;; iters/sec throughput. This is the profiling driver — run it under the
+;; in-flight lg profiling flags (PR #303):
+;;   lg -cpuprofile=cpu.pprof dev/mandelbrot.lg </dev/null
+;;   lg -memprofile=mem.pprof dev/mandelbrot.lg </dev/null   # alloc/boxing
+;; compute = VM arithmetic/dispatch; encode = sixel encoder (subs/nth/conj).
+(def bench-frames 20)
+
+(defn run-bench []
+  (println (str "mandelbrot bench — " bench-frames " frames, grid " CW "×" CH
+                " scale " SCALE " maxiter " home-maxiter " (no TTY)"))
+  (loop [n 0]
+    (when (< n bench-frames)
+      (let [t0 (inst-ms (now))
+            gi (compute-grid home-x home-y home-w home-maxiter)
+            t1 (inst-ms (now))
+            s  (build-frame (first gi))
+            t2 (inst-ms (now))
+            compute-ms (- t1 t0)
+            ips (if (> compute-ms 0) (quot (* (second gi) 1000) compute-ms) 0)]
+        (println (str "frame " n "  compute=" compute-ms "ms  encode=" (- t2 t1)
+                      "ms  iters=" (second gi) "  iters/s=" ips "  bytes=" (count s))))
+      (recur (inc n)))))
+
+(defn -main []
+  ;; term/size is nil only on a non-TTY native run (piped/redirected); under
+  ;; wasm it always returns a value. So: interactive on a TTY (or wasm), and
+  ;; the headless bench when piped — which is exactly the profiling invocation.
+  (if (nil? (term/size))
+    (run-bench)
+    (do
+      (setup!)
+      (try
+        (loop-keys)
+        (finally (teardown!))))))
+
+(when-not *compiling-aot*
+  (-main))
