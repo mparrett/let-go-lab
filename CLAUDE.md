@@ -11,8 +11,11 @@ from the let-go runtime repo so experiments don't churn it.
 demos/<name>/        one experiment each: <name>.lg + shell.html (its browser shell)
 harness/             reusable browser-shell-for-lg backbone:
                        inject-shell.sh  — bake a client shell into a `lg -w` bundle
+                       inline-assets.sh — inline vendored xterm into the shell (offline)
+                       vendor/          — pinned xterm assets (committed; see its README)
                        serve.json       — COOP/COEP headers (cross-origin isolation)
-scripts/             serve.sh (browser, HTTPS/LAN) · play.sh (native TUI)
+scripts/             serve.sh (browser, HTTPS/LAN) · serve.py (stdlib static server)
+                       play.sh (native TUI) · vendor-xterm.sh (re-fetch pins)
 let-go/              symlink to your lg checkout (gitignored; create it or set LETGO)
 dist/                built bundles (gitignored)
 certs/               local TLS certs (gitignored; generate your own — see below)
@@ -38,10 +41,10 @@ and SGR mouse input (#313) — both are on let-go's `main`, so a stock build wor
 ## Serving needs cross-origin isolation
 
 let-go's wasm input ring (`read-key`) is `SharedArrayBuffer`-backed, so the page
-must be a secure context with COOP/COEP headers (`harness/serve.json` supplies
-them via `npx serve`). `localhost` over HTTP IS a secure context (works); a LAN
-IP is NOT — use HTTPS for a phone. Generate your own certs (this repo ships
-none):
+must be a secure context with COOP/COEP headers. `scripts/serve.py` (stdlib, no
+npm) serves the bundle and applies the headers from `harness/serve.json`.
+`localhost` over HTTP IS a secure context (works); a LAN IP is NOT — use HTTPS
+for a phone. Generate your own certs (this repo ships none):
 
 - **Tailscale (no phone-side trust needed):** `tailscale cert <host>.<tailnet>.ts.net`,
   then place `cert.pem` / `key.pem` in `${XDG_DATA_HOME:-~/.local/share}/let-go-lab/le/`.
