@@ -182,17 +182,21 @@
   (term/move-cursor 1 3)
   (term/write "tap · +/- · hjkl · ,. · r · q        "))
 
-;; Bottom bar: split phase timing + the live params, the triage signal for
-;; "which phase dominates" (compute = VM arithmetic/dispatch; emit = the sixel
-;; encoder — subs/nth/conj). Pinned to the terminal's last row (via term/size)
-;; so it sits at the screen bottom. NB: move-cursor is (col row), not (row col).
+;; Bottom bar: split phase timing + the live params (the triage signal for
+;; "which phase dominates" — compute = VM arithmetic/dispatch; emit = the sixel
+;; encoder). Written at the cursor the sixel image left just below itself: both
+;; iTerm2 and xterm advance the cursor past a sixel, so the bar tracks the
+;; fractal. (It used to pin to the terminal's last rows via term/size, which
+;; floats far below the image in a tall window.) Leading \r\n = one blank gap row.
+;; Erase cursor→end-of-line: clears a previous longer value WITHOUT adding width.
+;; (Trailing-space padding would wrap past the narrow terminal and eat a row,
+;; which absolute positioning hid but this relative write doesn't.)
+(def CLEAR-EOL (str ESC "[K"))
 (defn bottom-status [mi iters compute-ms emit-ms]
-  (let [sz (term/size)
-        rows (max (if sz (nth sz 1) 24) 16)]   ; guard a bogus/unfitted size
-    (term/move-cursor 1 (dec rows))            ; timing on the second-to-last row,
-    (term/write (str "compute " compute-ms "ms · emit " emit-ms "ms · iters " iters "        "))
-    (term/move-cursor 1 rows)                  ; params on the last — two short lines
-    (term/write (str "maxiter " mi " · grid " CW "×" CH " ·" SCALE "x        "))))
+  (term/write (str "\r\n"
+                   "compute " compute-ms "ms · emit " emit-ms "ms · iters " iters CLEAR-EOL
+                   "\r\n"
+                   "maxiter " mi " · grid " CW "×" CH " ·" SCALE "x" CLEAR-EOL)))
 
 ;; Encode a whole frame to one sixel string WITHOUT writing it — the encode
 ;; path in isolation (used by the headless bench so a profile of compute+encode
@@ -239,9 +243,17 @@
         (term/flush)                      ; stream each band as it finishes
         (recur (inc b))))
     (term/write (str ESC "\\"))
-    ;; Status last, so it overwrites the "computing…" marker on the coords row.
-    (status cx cy vw)
+    ;; Erase from here (the cursor the sixel left just below the image) to the end
+    ;; of the screen, THEN write the bar. Clears any stale bottom bar a prior frame
+    ;; stranded — iTerm2's cursor-after-sixel isn't perfectly stable, so without
+    ;; this the relative bar can ghost. Harmless in xterm (clears the rows the bar
+    ;; reoccupies anyway).
+    (term/write (str ESC "[J"))
+    ;; bottom-status FIRST — it writes at the cursor just below the image
+    ;; (relative). status SECOND/last, so it still overwrites the "computing…"
+    ;; marker on the coords row up top.
     (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1))
+    (status cx cy vw)
     (term/flush)))
 
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
@@ -269,13 +281,17 @@
   (term/flush)
   (term/restore-mode!))    ; no-op in wasm
 
-;; Decode an SGR mouse report "ESC[<b;x;y(M|m)" → {:action :button :x :y} or nil
-;; (read-key yields one event per call, so k is exactly one report). This is the
-;; "Phase 3" decode term_wasm.go notes read-key doesn't do yet; the map shape
-;; ({:action :press|:release :button :left|… :x :y}, 1-based cell coords) is the
-;; obvious one, so it could move into read-key upstream unchanged.
+;; Normalize one read-key result to a mouse event {:action :button :x :y …} or nil.
+;; read-key reports a mouse event two ways: NATIVE (#313 hybrid) returns a decoded
+;; map {:type :mouse :action … :button … :x :y :mods …} directly; WASM returns the
+;; raw SGR string "ESC[<b;x;y(M|m)" (its in-runtime decode is "Phase 3, not done").
+;; The map? branch MUST come first — running subs/count on the native map (as an
+;; earlier version did) throws, which on a TTY crashes mid-loop and leaves mouse
+;; reporting on, leaking raw reports to the shell.
 (defn mouse-event [k]
-  (when (and (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
+  (cond
+    (map? k) (when (= (:type k) :mouse) k)
+    (and (string? k) (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
     (let [n (count k)
           parts (string/split (subs k 3 (dec n)) ";")]
       (when (= (count parts) 3)
@@ -287,7 +303,8 @@
                      (= (bit-and b 3) 1) :middle
                      :else :right)
            :x (parse-int (nth parts 1))
-           :y (parse-int (nth parts 2))})))))
+           :y (parse-int (nth parts 2))})))
+    :else nil))
 
 (defn clamp01 [v] (max 0.0 (min 1.0 v)))
 
