@@ -23,5 +23,14 @@ curl -fsSL "$BASE/@xterm/xterm@${XTERM_VER}/lib/xterm.min.js"            -o "$DE
 curl -fsSL "$BASE/@xterm/addon-fit@${FIT_VER}/lib/addon-fit.min.js"      -o "$DEST/addon-fit.min.js"
 curl -fsSL "$BASE/@xterm/addon-image@${IMAGE_VER}/lib/addon-image.min.js" -o "$DEST/addon-image.min.js"
 
+# License notices — vendored so the self-contained bundle redistributes them
+# (the assets carry no full license header; addon-image.min.js even points at
+# the separate addon-image.js.LICENSE.txt).
+echo "==> fetching LICENSE notices"
+curl -fsSL "$BASE/@xterm/xterm@${XTERM_VER}/LICENSE"       -o "$DEST/xterm.LICENSE.txt"
+curl -fsSL "$BASE/@xterm/addon-fit@${FIT_VER}/LICENSE"     -o "$DEST/addon-fit.LICENSE.txt"
+curl -fsSL "$BASE/@xterm/addon-image@${IMAGE_VER}/LICENSE" -o "$DEST/addon-image.LICENSE.txt"
+curl -fsSL "$BASE/@xterm/addon-image@${IMAGE_VER}/lib/addon-image.js.LICENSE.txt" -o "$DEST/addon-image.js.LICENSE.txt"
+
 echo "==> SHA-256 (update harness/vendor/README.md if these changed):"
 ( cd "$DEST" && shasum -a 256 xterm.min.css xterm.min.js addon-fit.min.js addon-image.min.js )

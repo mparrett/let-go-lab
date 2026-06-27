@@ -18,7 +18,8 @@ VDIR="${2:-$LAB/harness/vendor/xterm@5.5.0}"
 MARKER="<!--LETGO-LAB-XTERM-ASSETS-->"
 
 [[ -f "$SHELL_HTML" ]] || { echo "inline-assets: no $SHELL_HTML" >&2; exit 1; }
-for f in xterm.min.css xterm.min.js addon-fit.min.js addon-image.min.js; do
+for f in xterm.min.css xterm.min.js addon-fit.min.js addon-image.min.js \
+         xterm.LICENSE.txt addon-fit.LICENSE.txt addon-image.LICENSE.txt addon-image.js.LICENSE.txt; do
   [[ -f "$VDIR/$f" ]] || { echo "inline-assets: missing $VDIR/$f (run scripts/vendor-xterm.sh)" >&2; exit 1; }
 done
 grep -qF "$MARKER" "$SHELL_HTML" || {
@@ -26,6 +27,17 @@ grep -qF "$MARKER" "$SHELL_HTML" || {
 
 awk -v marker="$MARKER" -v vdir="$VDIR" '
   index($0, marker) {
+    # Carry the vendored license notices into the self-contained bundle so
+    # redistributing index.html also redistributes them (#9 review). MIT texts
+    # contain no "--", so an HTML comment is safe.
+    print "<!-- Bundled third-party licenses (xterm.js + addons, MIT):"
+    nl = split("xterm.LICENSE.txt addon-fit.LICENSE.txt addon-image.LICENSE.txt addon-image.js.LICENSE.txt", lic, " ")
+    for (i = 1; i <= nl; i++) {
+      print ""; print "=== " lic[i] " ==="
+      while ((getline l < (vdir "/" lic[i])) > 0) print l
+      close(vdir "/" lic[i])
+    }
+    print "-->"
     print "<style>"
     while ((getline l < (vdir "/xterm.min.css")) > 0) print l
     close(vdir "/xterm.min.css")

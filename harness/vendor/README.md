@@ -18,6 +18,20 @@ uses.
 | `addon-fit.min.js` | `https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js` | `a6a7bbb33569f16aa3e18d71425e34d035fc89a0b7e8cba084f8855f91aa38f1` |
 | `addon-image.min.js` | `https://cdn.jsdelivr.net/npm/@xterm/addon-image@0.8.0/lib/addon-image.min.js` | `9e9f76912ba3c450b7ca40b356ad1ea9238fe2640c57e72ef089482d56ecc252` |
 
+### License notices
+
+All three packages are MIT. The vendored minified assets carry no full license
+header (and `addon-image.min.js` points at a separate `.LICENSE.txt`), so the
+upstream notices are vendored alongside and inlined into the built `index.html`
+(an HTML comment) so the self-contained bundle redistributes them.
+
+| File | Package | Upstream |
+|------|---------|----------|
+| `xterm.LICENSE.txt` | `@xterm/xterm@5.5.0` | `…/@xterm/xterm@5.5.0/LICENSE` |
+| `addon-fit.LICENSE.txt` | `@xterm/addon-fit@0.10.0` | `…/@xterm/addon-fit@0.10.0/LICENSE` |
+| `addon-image.LICENSE.txt` | `@xterm/addon-image@0.8.0` | `…/@xterm/addon-image@0.8.0/LICENSE` |
+| `addon-image.js.LICENSE.txt` | `@xterm/addon-image@0.8.0` | `…/@xterm/addon-image@0.8.0/lib/addon-image.js.LICENSE.txt` (the file `addon-image.min.js` references) |
+
 ### Updating
 
 ```sh
