@@ -93,5 +93,10 @@ if [[ "$osc" -ne 1 || "$oec" -ne 1 ]] || ! grep -q "</body>" "$out_tmp" \
   exit 1
 fi
 
+# Preserve the original file's mode: mktemp made out_tmp 0600, so a bare mv would
+# leave the (typically 0644) generated index.html private — breaking copy/publish
+# or serving it under another account. Carry the original mode onto the result.
+orig_mode="$(stat -f '%Lp' "$INDEX" 2>/dev/null || stat -c '%a' "$INDEX" 2>/dev/null)"
 mv "$out_tmp" "$INDEX"
+[[ -n "$orig_mode" ]] && chmod "$orig_mode" "$INDEX"
 echo "inject-shell: injected $SHELL_HTML into $INDEX"

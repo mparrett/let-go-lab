@@ -25,6 +25,7 @@ make_index() { printf '<html><body>\n<script>window.LetGoHost={}</script>\n</bod
 make_shell() { printf '<style>#x{}</style>\n<script>/*shell %s*/</script>\n' "${1:-A}" > "$2"; }
 
 count() { grep -cF "$1" "$2" 2>/dev/null || true; }
+mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
 
 # 1. First injection succeeds with exactly one matched pair + surviving </body>.
 idx="$tmp/i1.html"; sh="$tmp/s1.html"; make_index "$idx"; make_shell "A" "$sh"
@@ -49,6 +50,16 @@ if [[ "$(count "$START" "$idx")" -eq 1 && "$(count "$END" "$idx")" -eq 1 ]] \
   pass "idempotent replacement"
 else
   fail "idempotent replacement (start=$(count "$START" "$idx") end=$(count "$END" "$idx") stable=$([[ "$before" == "$after" ]] && echo y || echo n))"
+fi
+
+# 2b. Mode preservation: a 0644 bundle must stay 0644 after injection (the temp
+#     file mktemp creates is 0600, so a bare mv would leak that mode).
+idx="$tmp/imode.html"; make_index "$idx"; chmod 644 "$idx"
+"$INJECT" "$idx" "$sh" >/dev/null 2>&1
+if [[ "$(mode "$idx")" == "644" ]]; then
+  pass "preserves file mode (0644)"
+else
+  fail "preserves file mode (got $(mode "$idx"), want 644)"
 fi
 
 # Helper: assert the injector fails nonzero AND leaves the file unchanged.
