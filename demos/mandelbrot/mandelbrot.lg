@@ -290,10 +290,17 @@
 ;; The map? branch MUST come first — running subs/count on the native map (as an
 ;; earlier version did) throws, which on a TTY crashes mid-loop and leaves mouse
 ;; reporting on, leaking raw reports to the shell.
+;; :native marks how the event was delivered, which also tells us whether we can
+;; map a click to image coordinates: a MAP means native read-key (#313 hybrid) —
+;; a real terminal we CANNOT measure (cursor/pixel/cell queries are swallowed by
+;; tmux), so click→complex mapping isn't trustworthy there. A STRING means wasm,
+;; where the browser shell content-sizes the terminal, so the image's cell-span
+;; IS known (= rows − CHROME-ROWS) and the mapping is exact. loop-keys uses this.
 (defn mouse-event [k]
   (cond
     (map? k) (when (= (:type k) :mouse)
-               (assoc k :shift (and (:mods k) (contains? (:mods k) :shift) true)))
+               (assoc k :native true
+                        :shift (and (:mods k) (contains? (:mods k) :shift) true)))
     (and (string? k) (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
     (let [n (count k)
           parts (string/split (subs k 3 (dec n)) ";")]
@@ -307,28 +314,31 @@
                      :else :right)
            :x (parse-int (nth parts 1))
            :y (parse-int (nth parts 2))
+           :native false
            :shift (> (bit-and b 4) 0)})))     ; SGR button byte: bit 2 = Shift
     :else nil))
 
 (defn clamp01 [v] (max 0.0 (min 1.0 v)))
 
-;; Map a click at cell (mx,my) to a complex point in the current view and
-;; recenter there — but ONLY for clicks landing on the image (rows IMG-ROW0 ..
-;; bottom). Returns [cx' cy'] or nil; the caller ignores nil, so taps on the
-;; status/timing rows don't trigger a clamped edge zoom. Vertical normalizes
-;; against the image's cell-span (rows − CHROME-ROWS) starting at IMG-ROW0.
-;; Horizontal uses the full width: in the content-sized browser layout the image
-;; fills the columns; in a wider native terminal a right-of-image click clamps,
-;; which is acceptable for tap-to-zoom. Cell-granular and approximate.
+;; Map a click at cell (mx,my) to a complex point in the current view and recenter
+;; there. BROWSER-ONLY: the caller gates this on a non-native event, because only
+;; the content-sized browser shell makes the image's cell extent known exactly —
+;; image is cols−(COL0−1) wide starting at COL0, and rows−CHROME-ROWS tall starting
+;; at IMG-ROW0 (the shell sizes the terminal to image+chrome). Returns [cx' cy'] or
+;; nil for clicks outside the image, so the caller ignores taps on the status/
+;; timing rows or the margins (no clamped edge zoom). Cell-granular, approximate.
 (defn click->center [cx cy vw mx my]
   (let [sz (term/size)
         cols (if sz (nth sz 0) 80)
         rows (if sz (nth sz 1) 24)
+        img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
         img-rows (max 1 (- rows CHROME-ROWS))
+        img-right (+ COL0 img-cols -1)
         img-bot (+ IMG-ROW0 img-rows -1)]
-    (when (and (>= my IMG-ROW0) (<= my img-bot))
+    (when (and (>= mx COL0) (<= mx img-right)
+               (>= my IMG-ROW0) (<= my img-bot))
       (let [vh (* vw (/ (float CH) (float CW)))
-            fx (clamp01 (/ (float (- mx COL0)) (float cols)))
+            fx (clamp01 (/ (float (- mx COL0)) (float img-cols)))
             fy (clamp01 (/ (float (- my IMG-ROW0)) (float img-rows)))]
         [(+ (- cx (/ vw 2.0)) (* fx vw))
          (+ (- cy (/ vh 2.0)) (* fy vh))]))))
@@ -349,11 +359,13 @@
         (= k ".") (recur cx cy vw (min mi-max (+ mi mi-step)))   ; more detail, slower
         (= k ",") (recur cx cy vw (max mi-min (- mi mi-step)))   ; less detail, faster
         (= k "r") (recur home-x home-y home-w home-maxiter)
-        ;; mouse: wheel zooms; left-press recenters + zooms IN, shift+left-press
-        ;; recenters + zooms OUT (so click alone isn't a one-way trip into the set).
+        ;; Wheel zooms (position-independent → works everywhere, both targets).
         (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi)
         (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi)
-        (and me (= (:action me) :press) (= (:button me) :left))
+        ;; Left-press recenters + zooms IN (shift = OUT), but ONLY in the browser:
+        ;; native (:native true) can't be measured, so a click would map to the
+        ;; wrong point. There, click is ignored — keyboard pan/zoom is the path.
+        (and me (= (:action me) :press) (= (:button me) :left) (not (:native me)))
         (let [c (click->center cx cy vw (:x me) (:y me))
               vw' (if (:shift me) (/ vw 0.7) (* vw 0.7))]
           (if c

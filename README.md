@@ -24,7 +24,9 @@ LAN/phone serving, and how to add a demo.
   and a single-pass sixel encoder.
 
   Controls: `+/-` zoom · `hjkl` / arrows pan · `,/.` maxiter · `r` reset ·
-  `q` quit · click to recenter+zoom (shift+click to zoom out) · wheel to zoom.
+  `q` quit · wheel to zoom. In the browser, click to recenter+zoom (shift+click
+  to zoom out); natively the terminal's image geometry isn't measurable, so use
+  the keyboard there.
 
   The same `.lg` runs natively in any sixel-capable terminal (`just play`):
 
