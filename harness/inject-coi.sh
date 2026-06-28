@@ -64,7 +64,9 @@ if [[ "$osc" -ne 1 || "$oec" -ne 1 ]] || ! grep -q "</head>" "$out_tmp"; then
   exit 1
 fi
 
-orig_mode="$(stat -f '%Lp' "$INDEX" 2>/dev/null || stat -c '%a' "$INDEX" 2>/dev/null)"
+# GNU stat (-c) first, BSD/macOS (-f) fallback — on Linux `stat -f '%Lp'` is
+# --file-system and "succeeds" with garbage, so it must not be tried first.
+orig_mode="$(stat -c '%a' "$INDEX" 2>/dev/null || stat -f '%Lp' "$INDEX" 2>/dev/null)"
 mv "$out_tmp" "$INDEX"
 [[ -n "$orig_mode" ]] && chmod "$orig_mode" "$INDEX"
 echo "inject-coi: injected COI bootstrap into $INDEX"
