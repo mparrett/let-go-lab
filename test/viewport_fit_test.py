@@ -17,8 +17,10 @@ import re
 import sys
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8250/"
-SETTLE_MS = 10000  # boot + geometry handshake + first fitted frame
-SETTLE_TIMEOUT = 15000  # poll budget for a frame to finish after a click
+# Renders are slow (compute + band-streamed emit ≈ 10s under headless/CI load), so
+# everything is poll-based with generous budgets rather than fixed sleeps.
+SETTLE_TIMEOUT = 40000   # a frame to finish (bottom status written) — boot or post-click
+RACE_TIMEOUT = 150000    # the resize race converges through ~3 sequential renders
 
 
 def coords(pg, timeout=SETTLE_TIMEOUT):
@@ -43,13 +45,35 @@ def image_box(pg):
     )
 
 
+def read_scale(pg):
+    """The scale the program last rendered at — ground truth via the OSC 5003
+    signal the program emits each render (window.__lgRenderedScale), recorded by
+    the shell. Distinct from window.__lgScale (what the shell asked for). Robust
+    to terminal scrolling, unlike scraping the relative-positioned bottom status."""
+    return pg.evaluate("() => (window.__lgRenderedScale ?? null)")
+
+
+def wait_settled(pg, timeout=SETTLE_TIMEOUT):
+    """Block until a frame has fully rendered (the bottom status row exists), i.e.
+    the program is parked at read-key with a free input slot. Returns the rendered
+    scale, or None on timeout."""
+    waited = 0
+    while waited <= timeout:
+        s = read_scale(pg)
+        if s is not None:
+            return s
+        pg.wait_for_timeout(500)
+        waited += 500
+    return None
+
+
 def load(p, w, h):
     pg = p.chromium.launch().new_context(viewport={"width": w, "height": h}).new_page()
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
     pg.goto(URL, wait_until="networkidle", timeout=30000)
-    pg.wait_for_timeout(SETTLE_MS)
+    wait_settled(pg)   # first fitted frame done before any interaction
     return pg, errs
 
 
@@ -110,6 +134,79 @@ def check_viewport(p, tag, w, h, want_scale):
     return not fails
 
 
+def check_resize_race(p):
+    """Regression for the dropped-scale handshake (PR #13 review): a resize whose
+    'S<n>' send is dropped (1-slot key ring busy) must still converge — the
+    program's rendered scale must eventually match window.__lgScale.
+
+    Reproduce the drop: start a render, queue an unrelated key so the slot is
+    occupied, then resize. The resize's S2 is refused; only the retry path makes
+    it land. The buggy version (ack-on-send) never retries and stays mismatched.
+    """
+    fails = []
+    pg = p.chromium.launch().new_context(viewport={"width": 1280, "height": 900}).new_page()
+    errs = []
+    pg.on("pageerror", lambda e: errs.append(str(e)))
+    pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
+    pg.goto(URL, wait_until="networkidle", timeout=30000)
+    start = wait_settled(pg)   # parked at read-key, slot free
+    if start != 3:
+        fails.append(f"race: expected initial rendered scale 3, got {start}")
+
+    # Observe the shell's own sendInput calls without interfering (don't send S2
+    # ourselves — that could deliver it and mask a broken retry).
+    pg.evaluate("""() => {
+      window.__lgSends = [];
+      const orig = window.LetGoHost.sendInput.bind(window.LetGoHost);
+      window.LetGoHost.sendInput = (s) => { const r = orig(s); window.__lgSends.push([s, r]); return r; };
+    }""")
+
+    # Start a render (program reads '+' immediately since it's parked), then fill
+    # the 1-slot key ring with an unrelated key while it's busy — so the upcoming
+    # resize send hits an occupied slot and is dropped.
+    pg.evaluate("() => window.LetGoHost.sendInput('+')")   # consumed at once → render starts
+    pg.wait_for_timeout(800)                               # ensure it's mid-render, not reading
+    pg.evaluate("() => window.LetGoHost.sendInput('x')")   # occupies the slot mid-render
+
+    # Resize narrow → shell wants scale 2; its S2 send hits the busy slot.
+    pg.set_viewport_size({"width": 390, "height": 780})
+    pg.evaluate("() => window.dispatchEvent(new Event('resize'))")
+    pg.wait_for_timeout(400)
+    want = pg.evaluate("() => window.__lgScale")
+
+    # Converge: poll until the rendered scale matches what the shell asked for.
+    # This needs ~3 sequential renders (+ , x, then S2→scale 2), hence the budget.
+    converged = False
+    waited = 0
+    while waited <= RACE_TIMEOUT:
+        if read_scale(pg) == want:
+            converged = True
+            break
+        pg.wait_for_timeout(2000)   # poll gently so it doesn't starve the render worker
+        waited += 2000
+
+    final = read_scale(pg)
+    sends = pg.evaluate("() => window.__lgSends")
+    drops = sum(1 for s, r in sends if s == "S2" and r is False)   # shell's S2 refused (slot busy)
+    if want != 2:
+        fails.append(f"race: shell did not request scale 2 (__lgScale={want})")
+    if drops == 0:
+        fails.append(f"race: did not reproduce a dropped S2 send (sends={sends}); test inconclusive")
+    if not converged:
+        fails.append(f"race: rendered scale {final} never matched __lgScale {want} "
+                     f"within {RACE_TIMEOUT // 1000}s (drops={drops}, sends={sends})")
+    if errs:
+        fails.append(f"race: console/page errors {errs[:4]}")
+    pg.context.browser.close()
+
+    for f in fails:
+        print("FAIL", f)
+    if not fails:
+        print(f"PASS race: {drops} dropped S2 send(s) recovered — rendered scale "
+              f"converged {start}→{final} == __lgScale {want}")
+    return not fails
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
@@ -120,6 +217,7 @@ def main():
     with sync_playwright() as p:
         ok &= check_viewport(p, "phone-390", 390, 780, 2)
         ok &= check_viewport(p, "desktop", 1280, 900, 3)
+        ok &= check_resize_race(p)
     return 0 if ok else 1
 
 

@@ -225,6 +225,14 @@
 (defn computing-cue [on]
   (term/write (str ESC "]5000;" (if on "1" "0") (char 7))))
 
+;; Private OSC announcing the scale the program just rendered at. The browser
+;; shell records it as ground truth (the on-screen bottom status is relative-
+;; positioned, so after a dynamic resize the xterm buffer can hold stale frames
+;; that make scraping it unreliable; the #6 resize regression reads this instead).
+;; Native terminals ignore the unknown OSC.
+(defn rendered-scale-cue [scale]
+  (term/write (str ESC "]5003;" scale (char 7))))
+
 (defn render [cx cy vw mi scale]
   (term/hide-cursor)
   ;; No per-frame clear: the previous fractal stays on screen through the (slow)
@@ -266,6 +274,7 @@
     ;; marker on the coords row up top.
     (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1) scale)
     (status cx cy vw)
+    (rendered-scale-cue scale)
     (term/flush)))
 
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.

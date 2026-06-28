@@ -54,7 +54,25 @@
     // viewport and tells the program via an "S<n>" key (sendInput).
     let GRID_W = 160, GRID_H = 120, CHROME_ROWS = 8, MARGIN_COLS = 1;
     const SCALE_MIN = 1, SCALE_MAX = 3;
-    let lastSentScale = null;
+
+    // Resize handshake state. desiredScale is the latest scale the viewport wants;
+    // ackedScale is the last scale the program actually ACCEPTED. sendInput drops
+    // ("S<n>" returns false) when the program's 1-slot key ring is already
+    // occupied — which happens precisely when the program is mid-render and an
+    // unconsumed key is queued. Tracking acked separately (vs the old single
+    // lastSentScale, which recorded sends optimistically) means a dropped update
+    // is retried, not silently treated as delivered.
+    let desiredScale = null, ackedScale = null;
+    function trySendScale() {
+      if (desiredScale === null || desiredScale === ackedScale) return;
+      if (window.LetGoHost && window.LetGoHost.sendInput &&
+          window.LetGoHost.sendInput("S" + desiredScale)) {
+        ackedScale = desiredScale;   // accepted; the program will pick it up on its next read-key
+      }
+      // else: slot busy — retried from onOutput, which fires whenever the program
+      // is producing a frame and therefore draining its input slot.
+    }
+
     function cellDims() {
       try {
         const d = term._core._renderService.dimensions.css.cell;
@@ -94,13 +112,11 @@
       termEl.style.width = Math.ceil(cell.w * g.cols) + "px";
       termEl.style.height = Math.ceil(cell.h * g.rows) + "px";
       if (window.LetGoHost && window.LetGoHost.setSize) window.LetGoHost.setSize(g.cols, g.rows);
-      // Tell the program the fitted scale only when it changes — re-sending the
-      // same scale would force a needless recompute, and two messages racing
-      // into the 1-slot key ring while the program is mid-compute can drop one.
-      if (window.LetGoHost && window.LetGoHost.sendInput && scale !== lastSentScale) {
-        window.LetGoHost.sendInput("S" + scale);
-        lastSentScale = scale;
-      }
+      // Record the fitted scale and (try to) hand it to the program. trySendScale
+      // only acks on a successful send and retries otherwise, so a scale change
+      // that races a busy key slot still lands — converging to the newest desired.
+      desiredScale = scale;
+      trySendScale();
       window.__lgGrid = g.cols + "x" + g.rows;
       window.__lgScale = scale;
     }
@@ -138,7 +154,18 @@
           scheduleRelayout();
           return "";
         });
+        // The scale the program actually rendered (OSC 5003), recorded as ground
+        // truth — the relative bottom status is unreliable to scrape after a
+        // dynamic resize. Used by the #6 resize regression test.
+        s = s.replace(/\x1b\]5003;(\d+)\x07/g, (_m, n) => {
+          window.__lgRenderedScale = +n;
+          return "";
+        });
         term.write(s);
+        // Retry a dropped scale handoff: any program output means it's running
+        // a frame and draining its key slot, so a previously-busy slot is likely
+        // free now. No-op once desiredScale is acked.
+        trySendScale();
       });
       if (mode === "worker") {
         term.onResize(({ cols, rows }) => window.LetGoHost.setSize(cols, rows));
