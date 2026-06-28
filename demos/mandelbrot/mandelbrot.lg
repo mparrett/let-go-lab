@@ -471,6 +471,12 @@
           pan (* vw 0.2)
           me (mouse-event k)]
       (cond
+        ;; EOF: read-key returns nil when stdin closes (TTY stdout but stdin
+        ;; redirected/disconnected). Without this, nil falls to the default
+        ;; recurrence and re-renders a full frame before reading EOF again —
+        ;; an unbounded, expensive spin. Exit instead; teardown still runs via
+        ;; -main's finally. MUST precede the default branch.
+        (nil? k) nil
         (or (= k "+") (= k "=")) (recur cx cy (* vw 0.7) mi)
         (or (= k "-") (= k "_")) (recur cx cy (/ vw 0.7) mi)
         (or (= k "h") (= k left-key)) (recur (- cx pan) cy vw mi)
