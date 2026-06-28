@@ -290,12 +290,12 @@
 ;; The map? branch MUST come first — running subs/count on the native map (as an
 ;; earlier version did) throws, which on a TTY crashes mid-loop and leaves mouse
 ;; reporting on, leaking raw reports to the shell.
-;; :native marks how the event was delivered, which also tells us whether we can
-;; map a click to image coordinates: a MAP means native read-key (#313 hybrid) —
-;; a real terminal we CANNOT measure (cursor/pixel/cell queries are swallowed by
-;; tmux), so click→complex mapping isn't trustworthy there. A STRING means wasm,
-;; where the browser shell content-sizes the terminal, so the image's cell-span
-;; IS known (= rows − CHROME-ROWS) and the mapping is exact. loop-keys uses this.
+;; :native marks how the event was delivered, which selects the click-mapping
+;; path: a MAP means native read-key (#313 hybrid) — a real terminal, where the
+;; image's cell extent is measured by a cell-size probe (see cell-size, issue
+;; #5) rather than known a priori. A STRING means wasm, where the browser shell
+;; content-sizes the terminal so the cell-span IS known exactly (= rows −
+;; CHROME-ROWS). loop-keys branches on :native to pick the right mapper.
 (defn mouse-event [k]
   (cond
     (map? k) (when (= (:type k) :mouse)
@@ -320,20 +320,15 @@
 
 (defn clamp01 [v] (max 0.0 (min 1.0 v)))
 
-;; Map a click at cell (mx,my) to a complex point in the current view and recenter
-;; there. BROWSER-ONLY: the caller gates this on a non-native event, because only
-;; the content-sized browser shell makes the image's cell extent known exactly —
-;; image is cols−(COL0−1) wide starting at COL0, and rows−CHROME-ROWS tall starting
-;; at IMG-ROW0 (the shell sizes the terminal to image+chrome). Returns [cx' cy'] or
-;; nil for clicks outside the image, so the caller ignores taps on the status/
-;; timing rows or the margins (no clamped edge zoom). Cell-granular, approximate.
-(defn click->center [cx cy vw mx my]
-  (let [sz (term/size)
-        cols (if sz (nth sz 0) 80)
-        rows (if sz (nth sz 1) 24)
-        img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
-        img-rows (max 1 (- rows CHROME-ROWS))
-        img-right (+ COL0 img-cols -1)
+;; Map a click at cell (mx,my) to a complex point in the current view, given the
+;; image's cell span (img-cols × img-rows) with its top-left at (COL0, IMG-ROW0).
+;; Returns [cx' cy'] or nil for clicks outside the image, so the caller ignores
+;; taps on the status/timing rows or the margins (no clamped edge zoom).
+;; Cell-granular, approximate. The two callers differ only in how they learn the
+;; span: the browser content-sizes the terminal (exact), native measures the
+;; cell pixel size and divides (click->center vs native-click->center).
+(defn map-click [cx cy vw mx my img-cols img-rows]
+  (let [img-right (+ COL0 img-cols -1)
         img-bot (+ IMG-ROW0 img-rows -1)]
     (when (and (>= mx COL0) (<= mx img-right)
                (>= my IMG-ROW0) (<= my img-bot))
@@ -342,6 +337,132 @@
             fy (clamp01 (/ (float (- my IMG-ROW0)) (float img-rows)))]
         [(+ (- cx (/ vw 2.0)) (* fx vw))
          (+ (- cy (/ vh 2.0)) (* fy vh))]))))
+
+;; BROWSER path: the content-sized shell sizes the terminal to image+chrome, so
+;; the image's cell extent is known exactly — cols−(COL0−1) wide from COL0, and
+;; rows−CHROME-ROWS tall from IMG-ROW0.
+(defn click->center [cx cy vw mx my]
+  (let [sz (term/size)
+        cols (if sz (nth sz 0) 80)
+        rows (if sz (nth sz 1) 24)
+        img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
+        img-rows (max 1 (- rows CHROME-ROWS))]
+    (map-click cx cy vw mx my img-cols img-rows)))
+
+;; --- Native cell-size probe (issue #5) -------------------------------------
+;; Mapping a NATIVE click needs the terminal's cell size in PIXELS: a sixel is
+;; fixed-pixel, so its cell extent is ceil(image_px / cell_px). The naive
+;; blocking CSI read hangs under tmux (the reply never reaches us), so two paths:
+;;   • Inside tmux ($TMUX set): tmux tracks the cell size to maintain its own
+;;     model and exposes it as format vars — shell out to `tmux display-message`.
+;;   • Bare terminal: the xterm window-op CSI 16t → reply `CSI 6;height;width t`
+;;     gives the cell size directly; 14t (text-area px) + 18t (text-area chars)
+;;     is the compat fallback (divide). Emit, flush, then poll key-pending? to a
+;;     deadline before read-key, so an unanswering terminal degrades to
+;;     keyboard-only instead of blocking forever.
+;; The result is cached; a SIGWINCH (surfaced by read-key as BEL) invalidates it
+;; so a terminal/font resize re-probes. WASM never reaches any of this: its
+;; clicks arrive as SGR strings (:native false → click->center), not the native
+;; map, so the bundle never shells out or consumes input to measure.
+(def probe-deadline-ms 120)
+(def probe-poll-ms 8)
+
+;; Parse a window-op reply "ESC[a;b;c t" into [a b c] ints, or nil if it isn't a
+;; t-terminated CSI carrying exactly three numeric params.
+(defn parse-csi-t [k]
+  (when (and (string? k)
+             (>= (count k) 4)
+             (= (subs k 0 2) (str ESC "["))
+             (= (subs k (dec (count k)) (count k)) "t"))
+    (let [parts (string/split (subs k 2 (dec (count k))) ";")]
+      (when (= (count parts) 3)
+        (let [a (parse-int (nth parts 0))
+              b (parse-int (nth parts 1))
+              c (parse-int (nth parts 2))]
+          (when (and a b c) [a b c]))))))
+
+;; Round-trip read for a window-op reply: poll key-pending? to a deadline and
+;; read tokens, returning the first "ESC[...t" CSI reply parsed to [a b c]. Other
+;; tokens are discarded — notably the mouse-release that follows the click that
+;; triggered the probe. Acceptable because we only probe right after a click, so
+;; a real keystroke is unlikely to be racing the reply.
+(defn read-csi-t [deadline-ms]
+  (loop [waited 0]
+    (cond
+      (term/key-pending?) (or (parse-csi-t (term/read-key)) (recur waited))
+      (>= waited deadline-ms) nil
+      :else (do (sleep probe-poll-ms) (recur (+ waited probe-poll-ms))))))
+
+;; Fallback when CSI 16t goes unanswered: 14t → `CSI 4;height;width t` (text
+;; area in px), 18t → `CSI 8;rows;cols t` (text area in chars); cell = px/chars.
+(defn probe-bare-14-18 []
+  (term/write (str ESC "[14t"))
+  (term/flush)
+  (let [a (read-csi-t probe-deadline-ms)]
+    (when (and a (= (nth a 0) 4))
+      (term/write (str ESC "[18t"))
+      (term/flush)
+      (let [b (read-csi-t probe-deadline-ms)]
+        (when (and b (= (nth b 0) 8))
+          (let [px-h (nth a 1) px-w (nth a 2)
+                char-h (nth b 1) char-w (nth b 2)]
+            (when (and (> char-w 0) (> char-h 0) (> px-w 0) (> px-h 0))
+              [(quot px-w char-w) (quot px-h char-h)])))))))
+
+;; Try CSI 16t (direct cell-pixel query) first, then the 14t/18t fallback.
+(defn probe-bare []
+  (term/write (str ESC "[16t"))
+  (term/flush)
+  (let [p (read-csi-t probe-deadline-ms)]
+    (if (and p (= (nth p 0) 6) (> (nth p 1) 0) (> (nth p 2) 0))
+      [(nth p 2) (nth p 1)]                       ; CSI 6;height;width t → [w h]
+      (probe-bare-14-18))))
+
+;; tmux model: `client_cell_width;client_cell_height` (verified tmux 3.6a). A
+;; nonzero exit, malformed output, or a non-positive value yields nil → caller
+;; degrades to keyboard-only.
+(defn probe-tmux []
+  (let [r (os/sh "tmux" "display-message" "-p"
+                 "#{client_cell_width};#{client_cell_height}")]
+    (when (= (:exit r) 0)
+      (let [parts (string/split (trim (:out r)) ";")]
+        (when (= (count parts) 2)
+          (let [w (parse-int (nth parts 0))
+                h (parse-int (nth parts 1))]
+            (when (and w h (> w 0) (> h 0)) [w h])))))))
+
+(defn probe-cell-size []
+  (if (= "" (os/getenv "TMUX")) (probe-bare) (probe-tmux)))
+
+;; Cache: nil = not probed (or invalidated by a resize); :none = probed but
+;; unmeasurable (don't re-probe on every click); [w h] = cell size in pixels.
+(def cell-px (atom nil))
+
+(defn cell-size []
+  (let [c @cell-px]
+    (cond
+      (vector? c) c
+      (= c :none) nil
+      :else (let [m (probe-cell-size)]
+              (reset! cell-px (or m :none))
+              m))))
+
+;; NATIVE path: derive the image's cell span from the measured cell size. Before
+;; mapping, verify the image actually FITS without terminal scrolling — if it
+;; doesn't, the sixel scrolls/clips and the apparent origin drifts from
+;; IMG-ROW0, so even a correct cell size maps to the wrong point. Returns
+;; [cx' cy'] or nil (outside the image, or doesn't fit → caller keeps
+;; keyboard-only).
+(defn native-click->center [cx cy vw mx my cell]
+  (let [cw (nth cell 0) ch (nth cell 1)
+        img-cols (int (math/ceil (/ (float WIDTH) (float cw))))
+        img-rows (int (math/ceil (/ (float HEIGHT) (float ch))))
+        sz (term/size)
+        cols (if sz (nth sz 0) 80)
+        rows (if sz (nth sz 1) 24)]
+    (when (and (>= cols (+ (dec COL0) img-cols))
+               (>= rows (+ CHROME-ROWS img-rows)))
+      (map-click cx cy vw mx my img-cols img-rows))))
 
 (defn loop-keys []
   (loop [cx home-x cy home-y vw home-w mi home-maxiter]
@@ -362,15 +483,23 @@
         ;; Wheel zooms (position-independent → works everywhere, both targets).
         (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi)
         (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi)
-        ;; Left-press recenters + zooms IN (shift = OUT), but ONLY in the browser:
-        ;; native (:native true) can't be measured, so a click would map to the
-        ;; wrong point. There, click is ignored — keyboard pan/zoom is the path.
-        (and me (= (:action me) :press) (= (:button me) :left) (not (:native me)))
-        (let [c (click->center cx cy vw (:x me) (:y me))
+        ;; Left-press recenters + zooms IN (shift = OUT). Browser maps exactly
+        ;; (content-sized); native measures the cell size first (issue #5),
+        ;; probing lazily on this first click and caching the result. A click
+        ;; that maps to nil — outside the image, or native with no measurable
+        ;; cell size — is ignored, leaving keyboard pan/zoom as the fallback.
+        (and me (= (:action me) :press) (= (:button me) :left))
+        (let [c (if (:native me)
+                  (let [cell (cell-size)]
+                    (when cell (native-click->center cx cy vw (:x me) (:y me) cell)))
+                  (click->center cx cy vw (:x me) (:y me)))
               vw' (if (:shift me) (/ vw 0.7) (* vw 0.7))]
           (if c
             (recur (first c) (second c) vw' mi)
-            (recur cx cy vw mi)))               ; click outside the image — ignore
+            (recur cx cy vw mi)))               ; unmappable click — ignore
+        ;; SIGWINCH surfaces as BEL from read-key: a resize may have changed the
+        ;; cell size, so drop the cached probe and re-render at the new size.
+        (= k (str (char 7))) (do (reset! cell-px nil) (recur cx cy vw mi))
         (= k "q") nil
         :else (recur cx cy vw mi)))))
 
