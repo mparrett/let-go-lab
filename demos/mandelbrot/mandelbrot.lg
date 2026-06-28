@@ -30,14 +30,23 @@
 ;; only CW·CH points are iterated. Cost ∝ 1/SCALE²: SCALE=2 is ~4× faster than
 ;; SCALE=1 for the same display size, at the cost of blockier detail. MAXITER
 ;; is the other lever — cost scales ~linearly with the average iteration count.
-(def SCALE 3)              ; sixel-pixel size of one computed pixel — bigger SCALE =
-                           ; bigger image at the SAME compute (just chunkier). For
-                           ; bigger AND sharper, raise CW/CH instead (costs compute).
+;; SCALE is now per-render, not a constant: the browser shell shrinks it to fit
+;; a narrow viewport (#6) by sending a private "S<n>" key on resize; native holds
+;; home-scale. Quality is set by CW/CH (the iterated grid); SCALE only trades
+;; image size for chunkiness, so adapting it costs no extra compute.
+(def home-scale 3)         ; default/native sixel-px size of one computed pixel
+(def scale-min 1)          ; clamp for a shell-requested scale
+(def scale-max 3)
 (def CW 160)              ; coarse grid width  in computed px
-(def CH 120)              ; coarse grid height in computed px — CH×SCALE must be mult of 6
-(def WIDTH (* CW SCALE))   ; on-screen image width  in sixel px (480)
-(def HEIGHT (* CH SCALE))  ; on-screen image height in sixel px (360) — MUST be mult of 6
+(def CH 120)              ; coarse grid height in computed px — CH×scale must be mult of 6
 (def NPAL 64)              ; palette size; registers 1..NPAL, 0 = interior black
+
+;; Image pixel size at a given scale: the CW×CH compute grid upscaled by scale.
+;; img-h (= CH·scale) must stay a multiple of 6 (sixel bands) — true for any
+;; integer scale since CH=120 is. These used to be the WIDTH/HEIGHT constants;
+;; they're per-render now so the browser can fit the image to the viewport.
+(defn img-w [scale] (* CW scale))
+(defn img-h [scale] (* CH scale))
 
 ;; --- Text layout. A 1-col left margin (COL0) and 1-row top margin keep the UI
 ;; off the terminal's corner. The sixel image is emitted at col COL0, row IMG-ROW0,
@@ -117,9 +126,9 @@
                         (recur (inc i) (conj a (color-index it mi)) (+ s it)))))]
           (recur (inc j) (first row) (second row)))))))
 
-;; Coarse-grid index for a display sub-row gy and display column gx (each /SCALE).
-(defn grid-at [grid gx gy]
-  (nth grid (+ (* (quot gy SCALE) CW) (quot gx SCALE))))
+;; Coarse-grid index for a display sub-row gy and display column gx (each /scale).
+(defn grid-at [grid gx gy scale]
+  (nth grid (+ (* (quot gy scale) CW) (quot gx scale))))
 
 (defn emit-run [acc ch len]
   (cond
@@ -127,10 +136,10 @@
     (>= len 4) (conj acc "!" (str len) ch)
     :else (conj acc (apply str (repeat len ch)))))
 
-;; RLE one color's full row (a vector of WIDTH masks) into a sixel string.
-(defn rle-row [row]
+;; RLE one color's full row (a vector of `width` masks) into a sixel string.
+(defn rle-row [row width]
   (loop [gx 0 cur "" run 0 acc []]
-    (if (>= gx WIDTH)
+    (if (>= gx width)
       (apply str (emit-run acc cur run))
       (let [ch (sixchar (nth row gx))]
         (if (= ch cur)
@@ -143,18 +152,18 @@
 ;; ~15-colour band); this touches each cell once. Color iteration order differs
 ;; from a set scan, but per-color rows and total bytes are identical (each pixel
 ;; has exactly one colour; overlay is commutative). See the workspace perf note.
-(defn encode-band [grid b]
+(defn encode-band [grid b scale width]
   (let [y0 (* b 6)
         rows (loop [gx 0 rws (transient {})]
-               (if (>= gx WIDTH)
+               (if (>= gx width)
                  rws
                  (recur (inc gx)
                    (loop [r 0 m rws]
                      (if (>= r 6)
                        m
-                       (let [c   (grid-at grid gx (+ y0 r))
+                       (let [c   (grid-at grid gx (+ y0 r) scale)
                              bit (bit-shift-left 1 r)
-                             tv  (or (get m c) (transient (vec (repeat WIDTH 0))))
+                             tv  (or (get m c) (transient (vec (repeat width 0))))
                              tv  (assoc! tv gx (bit-or (nth tv gx) bit))]
                          (recur (inc r) (assoc! m c tv))))))))
         prows (persistent! rows)
@@ -163,7 +172,7 @@
                    acc
                    (let [e (first cs)]
                      (recur (rest cs)
-                            (conj acc "#" (str (first e)) (rle-row (persistent! (second e))) "$")))))]
+                            (conj acc "#" (str (first e)) (rle-row (persistent! (second e)) width) "$")))))]
     (str (apply str pieces) "-")))
 
 ;; Kept short enough to stay on one line at the fitted terminal width — a
@@ -194,20 +203,21 @@
 ;; which absolute positioning hid but this relative write doesn't.)
 (def CLEAR-EOL (str ESC "[K"))
 ;; The leading space on each line is the COL0 left margin (the \r returns to col 1).
-(defn bottom-status [mi iters compute-ms emit-ms]
+(defn bottom-status [mi iters compute-ms emit-ms scale]
   (term/write (str "\r\n "
                    "compute " compute-ms "ms · emit " emit-ms "ms · iters " iters CLEAR-EOL
                    "\r\n "
-                   "maxiter " mi " · grid " CW "×" CH " ·" SCALE "x" CLEAR-EOL)))
+                   "maxiter " mi " · grid " CW "×" CH " ·" scale "x" CLEAR-EOL)))
 
 ;; Encode a whole frame to one sixel string WITHOUT writing it — the encode
 ;; path in isolation (used by the headless bench so a profile of compute+encode
 ;; isn't muddied by the IO/transport phase).
-(defn build-frame [grid]
-  (loop [b 0 acc [(str ESC "Pq" "\"1;1;" WIDTH ";" HEIGHT palette-defs)]]
-    (if (>= b (quot HEIGHT 6))
-      (apply str (conj acc (str ESC "\\")))
-      (recur (inc b) (conj acc (encode-band grid b))))))
+(defn build-frame [grid scale]
+  (let [width (img-w scale) height (img-h scale)]
+    (loop [b 0 acc [(str ESC "Pq" "\"1;1;" width ";" height palette-defs)]]
+      (if (>= b (quot height 6))
+        (apply str (conj acc (str ESC "\\")))
+        (recur (inc b) (conj acc (encode-band grid b scale width)))))))
 
 ;; Private OSC the browser shell (dev/shell-sixel.html) watches to dim the whole
 ;; terminal while a frame computes, then pop it bright when the new image lands.
@@ -215,7 +225,15 @@
 (defn computing-cue [on]
   (term/write (str ESC "]5000;" (if on "1" "0") (char 7))))
 
-(defn render [cx cy vw mi]
+;; Private OSC announcing the scale the program just rendered at. The browser
+;; shell records it as ground truth (the on-screen bottom status is relative-
+;; positioned, so after a dynamic resize the xterm buffer can hold stale frames
+;; that make scraping it unreliable; the #6 resize regression reads this instead).
+;; Native terminals ignore the unknown OSC.
+(defn rendered-scale-cue [scale]
+  (term/write (str ESC "]5003;" scale (char 7))))
+
+(defn render [cx cy vw mi scale]
   (term/hide-cursor)
   ;; No per-frame clear: the previous fractal stays on screen through the (slow)
   ;; compute so the screen never blanks. We dim it (shell-side, via computing-cue)
@@ -238,10 +256,10 @@
     ;; stall; the reveal is bright.
     (computing-cue false)
     (term/move-cursor COL0 IMG-ROW0)      ; image at (COL0, IMG-ROW0) — left + top margin
-    (term/write (str ESC "Pq" "\"1;1;" WIDTH ";" HEIGHT palette-defs))
+    (term/write (str ESC "Pq" "\"1;1;" (img-w scale) ";" (img-h scale) palette-defs))
     (loop [b 0]
-      (when (< b (quot HEIGHT 6))
-        (term/write (encode-band grid b))
+      (when (< b (quot (img-h scale) 6))
+        (term/write (encode-band grid b scale (img-w scale)))
         (term/flush)                      ; stream each band as it finishes
         (recur (inc b))))
     (term/write (str ESC "\\"))
@@ -254,8 +272,9 @@
     ;; bottom-status FIRST — it writes at the cursor just below the image
     ;; (relative). status SECOND/last, so it still overwrites the "computing…"
     ;; marker on the coords row up top.
-    (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1))
+    (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1) scale)
     (status cx cy vw)
+    (rendered-scale-cue scale)
     (term/flush)))
 
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
@@ -454,9 +473,10 @@
 ;; [cx' cy'] or nil (outside the image, or doesn't fit → caller keeps
 ;; keyboard-only).
 (defn native-click->center [cx cy vw mx my cell]
+  ;; Native holds home-scale (it never receives the shell's "S<n>" resize).
   (let [cw (nth cell 0) ch (nth cell 1)
-        img-cols (int (math/ceil (/ (float WIDTH) (float cw))))
-        img-rows (int (math/ceil (/ (float HEIGHT) (float ch))))
+        img-cols (int (math/ceil (/ (float (img-w home-scale)) (float cw))))
+        img-rows (int (math/ceil (/ (float (img-h home-scale)) (float ch))))
         sz (term/size)
         cols (if sz (nth sz 0) 80)
         rows (if sz (nth sz 1) 24)]
@@ -464,31 +484,38 @@
                (>= rows (+ CHROME-ROWS img-rows)))
       (map-click cx cy vw mx my img-cols img-rows))))
 
-(defn loop-keys []
-  (loop [cx home-x cy home-y vw home-w mi home-maxiter]
-    (render cx cy vw mi)
+;; A shell "S<n>" resize message (issue #6): a 2-byte token "S" + one digit,
+;; sent atomically via sendInput so a user keystroke (each its own 1-byte token)
+;; can't forge it. Returns the requested scale clamped to [scale-min scale-max],
+;; or nil if k isn't that message.
+(defn resize-scale [k]
+  (when (and (string? k) (= (count k) 2) (= (subs k 0 1) "S"))
+    (let [n (parse-int (subs k 1 2))]
+      (when n (max scale-min (min scale-max n))))))
+
+(defn loop-keys [init-scale]
+  (loop [cx home-x cy home-y vw home-w mi home-maxiter scale init-scale]
+    (render cx cy vw mi scale)
     (let [k (term/read-key)
           pan (* vw 0.2)
-          me (mouse-event k)]
+          me (mouse-event k)
+          rs (resize-scale k)]
       (cond
-        ;; EOF: read-key returns nil when stdin closes (TTY stdout but stdin
-        ;; redirected/disconnected). Without this, nil falls to the default
-        ;; recurrence and re-renders a full frame before reading EOF again —
-        ;; an unbounded, expensive spin. Exit instead; teardown still runs via
-        ;; -main's finally. MUST precede the default branch.
-        (nil? k) nil
-        (or (= k "+") (= k "=")) (recur cx cy (* vw 0.7) mi)
-        (or (= k "-") (= k "_")) (recur cx cy (/ vw 0.7) mi)
-        (or (= k "h") (= k left-key)) (recur (- cx pan) cy vw mi)
-        (or (= k "l") (= k right))    (recur (+ cx pan) cy vw mi)
-        (or (= k "k") (= k up))       (recur cx (- cy pan) vw mi)
-        (or (= k "j") (= k down))     (recur cx (+ cy pan) vw mi)
-        (= k ".") (recur cx cy vw (min mi-max (+ mi mi-step)))   ; more detail, slower
-        (= k ",") (recur cx cy vw (max mi-min (- mi mi-step)))   ; less detail, faster
-        (= k "r") (recur home-x home-y home-w home-maxiter)
+        ;; Browser resize: re-render at the shell's fitted scale. This also wakes
+        ;; this otherwise-blocked read-key (setSize alone doesn't notify it).
+        rs (recur cx cy vw mi rs)
+        (or (= k "+") (= k "=")) (recur cx cy (* vw 0.7) mi scale)
+        (or (= k "-") (= k "_")) (recur cx cy (/ vw 0.7) mi scale)
+        (or (= k "h") (= k left-key)) (recur (- cx pan) cy vw mi scale)
+        (or (= k "l") (= k right))    (recur (+ cx pan) cy vw mi scale)
+        (or (= k "k") (= k up))       (recur cx (- cy pan) vw mi scale)
+        (or (= k "j") (= k down))     (recur cx (+ cy pan) vw mi scale)
+        (= k ".") (recur cx cy vw (min mi-max (+ mi mi-step)) scale)   ; more detail, slower
+        (= k ",") (recur cx cy vw (max mi-min (- mi mi-step)) scale)   ; less detail, faster
+        (= k "r") (recur home-x home-y home-w home-maxiter scale)     ; reset view, keep scale
         ;; Wheel zooms (position-independent → works everywhere, both targets).
-        (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi)
-        (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi)
+        (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi scale)
+        (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi scale)
         ;; Left-press recenters + zooms IN (shift = OUT). Browser maps exactly
         ;; (content-sized); native measures the cell size first (issue #5),
         ;; probing lazily on this first click and caching the result. A click
@@ -501,13 +528,16 @@
                   (click->center cx cy vw (:x me) (:y me)))
               vw' (if (:shift me) (/ vw 0.7) (* vw 0.7))]
           (if c
-            (recur (first c) (second c) vw' mi)
-            (recur cx cy vw mi)))               ; unmappable click — ignore
+            (recur (first c) (second c) vw' mi scale)
+            (recur cx cy vw mi scale)))         ; unmappable click — ignore
+        ;; EOF: read-key returns nil when stdin closes; exit so we don't spin
+        ;; re-rendering (teardown runs via -main's finally). MUST precede :else.
+        (nil? k) nil
         ;; SIGWINCH surfaces as BEL from read-key: a resize may have changed the
         ;; cell size, so drop the cached probe and re-render at the new size.
-        (= k (str (char 7))) (do (reset! cell-px nil) (recur cx cy vw mi))
+        (= k (str (char 7))) (do (reset! cell-px nil) (recur cx cy vw mi scale))
         (= k "q") nil
-        :else (recur cx cy vw mi)))))
+        :else (recur cx cy vw mi scale)))))
 
 ;; Headless bench: render BENCH-FRAMES frames of the fixed home view (no TTY,
 ;; no input, no sixel write), printing per-frame compute/encode timing + the
@@ -520,19 +550,39 @@
 
 (defn run-bench []
   (println (str "mandelbrot bench — " bench-frames " frames, grid " CW "×" CH
-                " scale " SCALE " maxiter " home-maxiter " (no TTY)"))
+                " scale " home-scale " maxiter " home-maxiter " (no TTY)"))
   (loop [n 0]
     (when (< n bench-frames)
       (let [t0 (inst-ms (now))
             gi (compute-grid home-x home-y home-w home-maxiter)
             t1 (inst-ms (now))
-            s  (build-frame (first gi))
+            s  (build-frame (first gi) home-scale)
             t2 (inst-ms (now))
             compute-ms (- t1 t0)
             ips (if (> compute-ms 0) (quot (* (second gi) 1000) compute-ms) 0)]
         (println (str "frame " n "  compute=" compute-ms "ms  encode=" (- t2 t1)
                       "ms  iters=" (second gi) "  iters/s=" ips "  bytes=" (count s))))
       (recur (inc n)))))
+
+;; Announce geometry to the client shell once at startup (issue #6 / the P3
+;; geometry-duplication finding): the shell parses this private OSC like the 5000
+;; dim cue, so it owns no hardcoded image size — it derives the fitting scale
+;; from CW/CH/CHROME-ROWS/COL0 and replies with an "S<n>" key. Native terminals
+;; ignore the unknown OSC and never reply, holding home-scale.
+(defn announce-geometry []
+  (term/write (str ESC "]5002;" CW ";" CH ";" CHROME-ROWS ";" COL0 (char 7)))
+  (term/flush))
+
+;; Wait briefly for the shell's initial "S<n>" so the first frame already fits
+;; the viewport (no clipped first paint). Returns the fitted scale, or home-scale
+;; if nothing replies within the deadline. Non-S tokens are discarded (startup
+;; only, so a real keystroke racing this is unlikely).
+(defn await-initial-scale []
+  (loop [waited 0]
+    (cond
+      (term/key-pending?) (or (resize-scale (term/read-key)) (recur waited))
+      (>= waited 200) home-scale
+      :else (do (sleep 8) (recur (+ waited 8))))))
 
 (defn -main []
   ;; term/size is nil only on a non-TTY native run (piped/redirected); under
@@ -543,7 +593,9 @@
     (do
       (setup!)
       (try
-        (loop-keys)
+        (announce-geometry)
+        ;; Browser waits for the shell's fitted scale; native holds home-scale.
+        (loop-keys (if *in-wasm* (await-initial-scale) home-scale))
         (finally (teardown!))))))
 
 (when-not *compiling-aot*
