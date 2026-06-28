@@ -1,0 +1,68 @@
+name: pages
+
+# Build the mandelbrot demo and deploy it to GitHub Pages
+# (https://mparrett.github.io/let-go-lab/). The bundle is single-file + offline
+# (wasm + xterm inlined), with a COI service worker that re-adds COOP/COEP so the
+# SharedArrayBuffer input ring works on Pages, which can't set those headers.
+#
+# Depends on the offline-bundle machinery (harness/inline-assets.sh + vendored
+# xterm, from the #9 work) being present on the deployed branch.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; don't cancel an in-flight deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Pinned let-go commit — same SHA + bump process as ci.yml. The lab never
+  # builds lg itself; it runs a stock upstream build.
+  LETGO_PIN: 5ba842f59f5e75fe6681eca7a005ecdd3da5fdf5
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build let-go (pinned upstream)
+        run: |
+          git clone https://github.com/nooga/let-go let-go-upstream
+          git -C let-go-upstream checkout "$LETGO_PIN"
+          make -C let-go-upstream build
+          ln -sfn "$PWD/let-go-upstream" let-go
+          ./let-go/lg --version || true
+
+      - name: Build Pages site
+        run: scripts/build-pages.sh
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true   # auto-enable Pages (Actions source) if not already
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
