@@ -129,6 +129,15 @@
       const termEl = document.getElementById("terminal");
       termEl.style.display = "block";
       term.open(termEl);
+      // xterm focuses its hidden helper textarea on every pointer-down to catch
+      // keystrokes; on a touch device that focus pops the on-screen keyboard
+      // over the fractal, while the same tap already recenters+zooms via the SGR
+      // mouse report (a separate channel). We drive this demo by tap/wheel and
+      // there's no physical keyboard on a phone, so suppress the virtual one.
+      // inputmode=none hides only the soft keyboard — hardware key events still
+      // fire, so desktop hjkl/+/- controls are unaffected.
+      const helperTextarea = termEl.querySelector(".xterm-helper-textarea");
+      if (helperTextarea) helperTextarea.setAttribute("inputmode", "none");
       relayout();
       term.focus();
       // Read-only test hook: lets the viewport/click test read a status row's
