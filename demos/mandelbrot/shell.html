@@ -4,8 +4,11 @@
   so raw sixel DCS strings written by the .lg program (via term/write) decode to
   pixels. Content-sized to the image; baked into the bundle by inject-shell.sh.
 
-  To adapt for a new demo: copy this file, change IMAGE_W/IMAGE_H/CHROME_ROWS to
-  match your program's image size and status rows.
+  To adapt for a new demo: copy this file as-is — geometry is program-driven.
+  The .lg announces its grid/chrome via a private OSC 5002 and the shell adopts
+  it (see the GRID_W/GRID_H/CHROME_ROWS fallbacks below); only edit those
+  fallbacks if you want the pre-announce first paint to match a very different
+  image size.
 -->
 <!-- xterm CSS/JS + addons. The build (harness/inline-assets.sh) replaces this
      marker with the committed harness/vendor/xterm@5.5.0 files inlined, so the
