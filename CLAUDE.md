@@ -60,3 +60,18 @@ cert it falls back to localhost HTTP.
    `IMAGE_H` / `CHROME_ROWS` to your image size, or write a minimal shell that
    binds `window.LetGoHost`.
 3. `just serve <name>` (browser) or `just play <name>` (native).
+
+## Deploy (GitHub Pages)
+
+`.github/workflows/pages.yml` builds the mandelbrot demo and publishes it to
+https://mparrett.github.io/let-go-lab/ on push to `main`. `scripts/build-pages.sh`
+assembles `_site/` (offline single-file bundle + `coi-serviceworker.js` +
+`.nojekyll`). Pages can't send COOP/COEP, which the `SharedArrayBuffer` input
+ring needs, so `harness/coi-serviceworker.js` re-adds them and a `<head>`
+bootstrap (`harness/coi-bootstrap.html`, injected by `inject-coi.sh`) registers
+it and reloads once into the isolated context. Build locally with
+`scripts/build-pages.sh` and serve `_site/` over plain HTTP to exercise the SW
+path (a headered origin like `serve.py` is already isolated, so the SW no-ops).
+
+First deploy: enable Pages with Source = GitHub Actions (the workflow's
+`configure-pages` step auto-enables it when the token allows).

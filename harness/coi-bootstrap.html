@@ -1,0 +1,29 @@
+<script>
+/* COI bootstrap (let-go-lab) — pairs with harness/coi-serviceworker.js.
+   Injected into <head> so it runs BEFORE the bundle's wasm boot (which branches
+   on crossOriginIsolated). let-go's wasm input ring needs SharedArrayBuffer,
+   i.e. a cross-origin-isolated context. Where the server can't send COOP/COEP
+   (GitHub Pages), register the service worker that adds them and reload; the
+   reloaded context is isolated. Bounded retries avoid a reload loop if isolation
+   never takes (e.g. a browser without SW) — after that the bundle falls back to
+   its main-thread, output-only mode. A headered origin (local serve.py) is
+   already isolated, so this is a no-op there. */
+(function () {
+  var KEY = "coi", MAX = 3;
+  var u = new URL(location.href);
+  if (window.crossOriginIsolated) {
+    if (u.searchParams.has(KEY)) { u.searchParams.delete(KEY); history.replaceState(null, "", u.href); }
+    return;
+  }
+  if (!window.isSecureContext || !("serviceWorker" in navigator)) return;
+  var n = parseInt(u.searchParams.get(KEY) || "0", 10);
+  if (n >= MAX) return;   // give up; bundle runs output-only
+  navigator.serviceWorker.register("coi-serviceworker.js").then(function () {
+    u.searchParams.set(KEY, String(n + 1));
+    var reload = function () { location.replace(u.href); };
+    if (navigator.serviceWorker.controller) { reload(); return; }
+    navigator.serviceWorker.addEventListener("controllerchange", reload, { once: true });
+    setTimeout(reload, 2000);   // fallback if controllerchange doesn't fire
+  }).catch(function () {});
+})();
+</script>
