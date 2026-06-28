@@ -14,7 +14,16 @@ set -euo pipefail
 
 SHELL_HTML="${1:?usage: inline-assets.sh <shell.html> [vendor-dir]}"
 LAB="$(cd "$(dirname "$0")/.." && pwd)"
-VDIR="${2:-$LAB/harness/vendor/xterm@5.5.0}"
+# Vendor dir: default to the lone committed harness/vendor/xterm@* (glob, so a
+# version bump in vendor-xterm.sh needs no edit here). Error on 0 or >1 rather
+# than silently inlining a stale version.
+if [[ -n "${2:-}" ]]; then
+  VDIR="$2"
+else
+  shopt -s nullglob; xdirs=("$LAB"/harness/vendor/xterm@*); shopt -u nullglob
+  (( ${#xdirs[@]} == 1 )) || { echo "inline-assets: expected exactly one harness/vendor/xterm@* dir, found ${#xdirs[@]} (run scripts/vendor-xterm.sh)" >&2; exit 1; }
+  VDIR="${xdirs[0]}"
+fi
 MARKER="<!--LETGO-LAB-XTERM-ASSETS-->"
 
 [[ -f "$SHELL_HTML" ]] || { echo "inline-assets: no $SHELL_HTML" >&2; exit 1; }
