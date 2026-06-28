@@ -73,9 +73,11 @@
 (def home-w 3.2)
 
 ;; --- Sixel data chars: index m (0..63) -> the char (m+63), as a 1-char str.
+;; Precomputed into a vector so sixchar is an O(1) nth, not a per-call `subs`
+;; that allocates a fresh substring every time — it's hot (once per RLE run).
 (def sixchars
-  (apply str (map (fn [i] (char (+ 63 i))) (range 64))))
-(defn sixchar [m] (subs sixchars m (inc m)))
+  (mapv (fn [i] (str (char (+ 63 i)))) (range 64)))
+(defn sixchar [m] (nth sixchars m))
 
 ;; --- Palette: IQ-style cosine gradient, each component in 0..100 ----------
 (defn iq [t phase]
@@ -126,25 +128,27 @@
                         (recur (inc i) (conj a (color-index it mi)) (+ s it)))))]
           (recur (inc j) (first row) (second row)))))))
 
-;; Coarse-grid index for a display sub-row gy and display column gx (each /scale).
-(defn grid-at [grid gx gy scale]
-  (nth grid (+ (* (quot gy scale) CW) (quot gx scale))))
-
-(defn emit-run [acc ch len]
+;; `m` is the raw mask (0..63); sixchar runs here, once per emitted run, rather
+;; than once per cell — len<=0 (the priming flush) skips it, so sixchar is never
+;; called on the -1 sentinel.
+(defn emit-run [acc m len]
   (cond
     (<= len 0) acc
-    (>= len 4) (conj acc "!" (str len) ch)
-    :else (conj acc (apply str (repeat len ch)))))
+    (>= len 4) (conj acc "!" (str len) (sixchar m))
+    :else (conj acc (apply str (repeat len (sixchar m))))))
 
 ;; RLE one color's full row (a vector of `width` masks) into a sixel string.
+;; The run compares raw masks (ints), not their chars — an integer = instead of
+;; a string =, and only one sixchar per run at the boundary. cur=-1 primes the
+;; loop (no real mask is negative), so the first cell always opens a fresh run.
 (defn rle-row [row width]
-  (loop [gx 0 cur "" run 0 acc []]
+  (loop [gx 0 cur -1 run 0 acc []]
     (if (>= gx width)
       (apply str (emit-run acc cur run))
-      (let [ch (sixchar (nth row gx))]
-        (if (= ch cur)
+      (let [m (nth row gx)]
+        (if (= m cur)
           (recur (inc gx) cur (inc run) acc)
-          (recur (inc gx) ch 1 (emit-run acc cur run)))))))
+          (recur (inc gx) m 1 (emit-run acc cur run)))))))
 
 ;; One 6px display band, SINGLE PASS: read each of the band's 6×WIDTH cells once
 ;; and route each cell's bit into its color's transient row buffer, then RLE each
@@ -154,18 +158,24 @@
 ;; has exactly one colour; overlay is commutative). See the workspace perf note.
 (defn encode-band [grid b scale width]
   (let [y0 (* b 6)
+        ;; Division hoist: the old per-cell grid-at did two `quot`s for each of
+        ;; the 6×width reads. The grid-row base depends only on the sub-row r
+        ;; (6 values per band) and the grid column only on gx — so precompute the
+        ;; 6 row bases once, and divide gx once per column instead of 6×.
+        row-base (mapv (fn [r] (* (quot (+ y0 r) scale) CW)) (range 6))
         rows (loop [gx 0 rws (transient {})]
                (if (>= gx width)
                  rws
-                 (recur (inc gx)
-                   (loop [r 0 m rws]
-                     (if (>= r 6)
-                       m
-                       (let [c   (grid-at grid gx (+ y0 r) scale)
-                             bit (bit-shift-left 1 r)
-                             tv  (or (get m c) (transient (vec (repeat width 0))))
-                             tv  (assoc! tv gx (bit-or (nth tv gx) bit))]
-                         (recur (inc r) (assoc! m c tv))))))))
+                 (let [gxq (quot gx scale)]
+                   (recur (inc gx)
+                     (loop [r 0 m rws]
+                       (if (>= r 6)
+                         m
+                         (let [c   (nth grid (+ (nth row-base r) gxq))
+                               bit (bit-shift-left 1 r)
+                               tv  (or (get m c) (transient (vec (repeat width 0))))
+                               tv  (assoc! tv gx (bit-or (nth tv gx) bit))]
+                           (recur (inc r) (assoc! m c tv)))))))))
         prows (persistent! rows)
         pieces (loop [cs (seq prows) acc []]
                  (if (empty? cs)
