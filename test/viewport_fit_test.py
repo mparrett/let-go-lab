@@ -207,12 +207,15 @@ def check_resize_race(p):
     return not fails
 
 
+SKIP_EXIT = 77   # conventional "skipped"; ci.sh maps it to skip (lenient) / fail (strict)
+
+
 def main():
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         print("SKIP: playwright not installed")
-        return 0
+        return SKIP_EXIT
     ok = True
     with sync_playwright() as p:
         ok &= check_viewport(p, "phone-390", 390, 780, 2)
