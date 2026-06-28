@@ -96,7 +96,9 @@ fi
 # Preserve the original file's mode: mktemp made out_tmp 0600, so a bare mv would
 # leave the (typically 0644) generated index.html private — breaking copy/publish
 # or serving it under another account. Carry the original mode onto the result.
-orig_mode="$(stat -f '%Lp' "$INDEX" 2>/dev/null || stat -c '%a' "$INDEX" 2>/dev/null)"
+# GNU stat (-c) first, BSD/macOS (-f) fallback: on Linux `stat -f '%Lp'` is
+# --file-system and "succeeds" with garbage, so it must not be tried first.
+orig_mode="$(stat -c '%a' "$INDEX" 2>/dev/null || stat -f '%Lp' "$INDEX" 2>/dev/null)"
 mv "$out_tmp" "$INDEX"
 [[ -n "$orig_mode" ]] && chmod "$orig_mode" "$INDEX"
 echo "inject-shell: injected $SHELL_HTML into $INDEX"
