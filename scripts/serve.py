@@ -57,7 +57,12 @@ def main():
 
     Handler.extra_headers = load_headers(args.headers)
     handler = partial(Handler, directory=args.dir)
-    httpd = ThreadingHTTPServer((args.host, args.port), handler)
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), handler)
+    except OSError as e:
+        print(f"serve.py: cannot bind {args.host}:{args.port} — {e.strerror or e}",
+              file=sys.stderr)
+        return 1
 
     if args.cert and args.key:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -67,8 +72,9 @@ def main():
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        httpd.shutdown()
         return 0
+    finally:
+        httpd.server_close()
 
 
 if __name__ == "__main__":

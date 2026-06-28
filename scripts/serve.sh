@@ -30,7 +30,7 @@ HTTPS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port)     PORT="$2"; shift 2 ;;
+    --port)     PORT="${2:?--port needs a value}"; shift 2 ;;
     --no-build) BUILD=0; shift ;;
     --http)     HTTPS=0; shift ;;
     -h|--help)  sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//;s/^set -e.*//'; exit 0 ;;
