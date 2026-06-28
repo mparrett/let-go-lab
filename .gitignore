@@ -1,6 +1,9 @@
 # built WASM bundles
 /dist/
 
+# built GitHub Pages site (scripts/build-pages.sh output)
+/_site/
+
 # local TLS certs (generate your own — see CLAUDE.md; this repo ships none)
 /certs/
 
