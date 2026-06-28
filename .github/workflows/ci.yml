@@ -16,8 +16,9 @@ env:
   # both merged). Pinning a tested SHA keeps CI reproducible — an unrelated
   # upstream commit can't change/break this repo's CI. To bump: pick a newer
   # nooga/let-go main SHA, build + run `scripts/ci.sh` against it locally, then
-  # update this value. Validated 2026-06-27 (demo builds, bench + suite pass).
-  LETGO_PIN: 5ba842f59f5e75fe6681eca7a005ecdd3da5fdf5
+  # update this value. Validated 2026-06-28 (demo builds, bench + suite pass;
+  # ~24% faster frame / encode −31% vs the prior pin, output byte-identical).
+  LETGO_PIN: 723fe22f28c26b5c087e474b96b5a9f43f2bf104
 
 jobs:
   smoke:
