@@ -72,6 +72,15 @@
 (def home-y 0.0)
 (def home-w 3.2)
 
+;; A tap recenters on the tapped point; whether it ALSO zooms in depends on how
+;; central the tap was. The tap's offset from the current center is normalized
+;; per-axis to [-0.5,0.5] (0 = dead center, ±0.5 = an edge); a tap whose larger
+;; axis-offset is within zoom-zone falls in the central box and zooms, one
+;; outside it only pans. 0.2 → the central ~40% of each dimension zooms. This
+;; makes edge taps a pan-around gesture (chiefly for touch, where shift-to-zoom-
+;; out and the wheel aren't available — see the loop-keys left-press branch).
+(def zoom-zone 0.2)
+
 ;; --- Sixel data chars: index m (0..63) -> the char (m+63), as a 1-char str.
 ;; Precomputed into a vector so sixchar is an O(1) nth, not a per-call `subs`
 ;; that allocates a fresh substring every time — it's hot (once per RLE run).
@@ -526,19 +535,31 @@
         ;; Wheel zooms (position-independent → works everywhere, both targets).
         (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi scale)
         (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi scale)
-        ;; Left-press recenters + zooms IN (shift = OUT). Browser maps exactly
-        ;; (content-sized); native measures the cell size first (issue #5),
-        ;; probing lazily on this first click and caching the result. A click
-        ;; that maps to nil — outside the image, or native with no measurable
-        ;; cell size — is ignored, leaving keyboard pan/zoom as the fallback.
+        ;; Left-press always recenters on the tapped point; whether it also zooms
+        ;; depends on where the tap landed (see zoom-zone): a central tap zooms
+        ;; IN, an off-center tap only pans (recenter, same vw), and shift forces
+        ;; zoom OUT regardless. Browser maps exactly (content-sized); native
+        ;; measures the cell size first (issue #5), probing lazily on this first
+        ;; click and caching it. A click that maps to nil — outside the image, or
+        ;; native with no measurable cell size — is ignored, leaving keyboard
+        ;; pan/zoom as the fallback.
         (and me (= (:action me) :press) (= (:button me) :left))
         (let [c (if (:native me)
                   (let [cell (cell-size)]
                     (when cell (native-click->center cx cy vw (:x me) (:y me) cell)))
-                  (click->center cx cy vw (:x me) (:y me)))
-              vw' (if (:shift me) (/ vw 0.7) (* vw 0.7))]
+                  (click->center cx cy vw (:x me) (:y me)))]
           (if c
-            (recur (first c) (second c) vw' mi scale)
+            (let [px (first c) py (second c)
+                  vh (* vw (/ (float CH) (float CW)))
+                  ;; Chebyshev offset of the tap from the current center,
+                  ;; normalized per-axis to [-0.5,0.5]; small = central.
+                  off (max (math/abs (/ (- px cx) vw))
+                           (math/abs (/ (- py cy) vh)))
+                  vw' (cond
+                        (:shift me)         (/ vw 0.7)    ; explicit zoom out
+                        (<= off zoom-zone)  (* vw 0.7)    ; central tap → zoom in
+                        :else               vw)]          ; off-center → pan only
+              (recur px py vw' mi scale))
             (recur cx cy vw mi scale)))         ; unmappable click — ignore
         ;; EOF: read-key returns nil when stdin closes; exit so we don't spin
         ;; re-rendering (teardown runs via -main's finally). MUST precede :else.
