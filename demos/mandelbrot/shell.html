@@ -7,10 +7,11 @@
   To adapt for a new demo: copy this file, change IMAGE_W/IMAGE_H/CHROME_ROWS to
   match your program's image size and status rows.
 -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
-<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-image@0.8.0/lib/addon-image.min.js"></script>
+<!-- xterm CSS/JS + addons. The build (harness/inline-assets.sh) replaces this
+     marker with the committed harness/vendor/xterm@5.5.0 files inlined, so the
+     generated index.html is self-contained and runs offline (#9). The vendored
+     .min.js are UMD builds exposing Terminal / FitAddon / ImageAddon. -->
+<!--LETGO-LAB-XTERM-ASSETS-->
 <style>
   html, body { background: #000; margin: 0; height: 100%; }
   /* Content-sized terminal box (relayout sizes it to the image + text rows),

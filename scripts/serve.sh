@@ -56,8 +56,14 @@ if [[ "$BUILD" == "1" ]]; then
   (cd "$SRC" && LETGO_SRC="$LETGO" "$LG" -w "$DIST" -w-shell none "$DEMO.lg")
 fi
 
-"$LAB/harness/inject-shell.sh" "$DIST/index.html" "$SHELL_HTML"
-cp "$LAB/harness/serve.json" "$DIST/"
+# Inline the vendored xterm assets into the shell (offline, self-contained —
+# #9), then inject the resolved shell into the bundle. The temp resolved shell
+# is cleaned on exit.
+RESOLVED_SHELL="$(mktemp "${TMPDIR:-/tmp}/lg-shell-XXXXXX")"   # trailing X's: BSD mktemp needs them last
+trap 'rm -f "$RESOLVED_SHELL"' EXIT
+"$LAB/harness/inline-assets.sh" "$SHELL_HTML" > "$RESOLVED_SHELL"
+"$LAB/harness/inject-shell.sh" "$DIST/index.html" "$RESOLVED_SHELL"
+rm -f "$RESOLVED_SHELL"   # consumed (baked into index.html); exec below skips the trap
 
 # Cert discovery (lab-specific; this repo ships none — generate your own, see
 # CLAUDE.md). Tailscale LE preferred (no phone-side trust needed).
@@ -84,17 +90,18 @@ print_urls() {
   fi
 }
 
+SERVE_PY="$LAB/scripts/serve.py"
+HEADERS="$LAB/harness/serve.json"
 if [[ "$HTTPS" == "1" ]] && find_certs; then
   echo "==> HTTPS serve on 0.0.0.0:${PORT} (cert: $CERT) — reachable at:"
   print_urls https
-  # serve@latest binds 0.0.0.0 by default when given a bare port.
-  exec npx --yes serve@latest "$DIST" -l "$PORT" --ssl-cert "$CERT" --ssl-key "$KEY"
+  exec python3 "$SERVE_PY" --dir "$DIST" --port "$PORT" --host 0.0.0.0 \
+       --cert "$CERT" --key "$KEY" --headers "$HEADERS"
 else
   [[ "$HTTPS" == "1" ]] && echo "==> no cert in \${XDG_DATA_HOME:-~/.local/share}/let-go-lab/ or certs/ — localhost HTTP only"
   echo "==> HTTP serve on localhost:${PORT} (LAN unreachable — SharedArrayBuffer needs a secure context):"
   echo "    http://localhost:${PORT}/"
-  # Bind localhost-only: a bare port binds 0.0.0.0, which would expose insecure
-  # HTTP on the LAN — an origin that isn't cross-origin isolated, so the demo
-  # can't run there anyway. tcp://localhost keeps the fallback to its one job.
-  exec npx --yes serve@latest "$DIST" -l "tcp://localhost:$PORT"
+  # Bind localhost-only: 0.0.0.0 would expose insecure HTTP on the LAN — an
+  # origin that isn't cross-origin isolated, so the demo can't run there anyway.
+  exec python3 "$SERVE_PY" --dir "$DIST" --port "$PORT" --host localhost --headers "$HEADERS"
 fi

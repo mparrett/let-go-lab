@@ -18,6 +18,11 @@ serve demo="mandelbrot" *ARGS:
 reserve demo="mandelbrot" *ARGS:
     LETGO="{{LETGO}}" scripts/serve.sh {{demo}} --no-build {{ARGS}}
 
+# re-fetch the pinned xterm browser assets into harness/vendor (the only
+# network step; day-to-day builds inline the committed copies — see #9)
+vendor-xterm:
+    scripts/vendor-xterm.sh
+
 # lg version + which let-go this points at
 env:
     @echo "LETGO = {{LETGO}}"
