@@ -21,10 +21,13 @@ addEventListener('fetch', (e) => {
     fetch(e.request)
       .then((r) => {
         if (r.status === 0) return r; // opaque response — leave it alone
+        const hasCOEP = r.headers.has('Cross-Origin-Embedder-Policy');
+        const hasCOOP = r.headers.has('Cross-Origin-Opener-Policy');
+        if (hasCOEP && hasCOOP) return r; // already isolated (headered origin) — passthrough
         const h = new Headers(r.headers);
         // require-corp is the broadest-compatible COEP (Safari/Firefox/Chrome).
-        if (!h.has('Cross-Origin-Embedder-Policy')) h.set('Cross-Origin-Embedder-Policy', 'require-corp');
-        if (!h.has('Cross-Origin-Opener-Policy')) h.set('Cross-Origin-Opener-Policy', 'same-origin');
+        if (!hasCOEP) h.set('Cross-Origin-Embedder-Policy', 'require-corp');
+        if (!hasCOOP) h.set('Cross-Origin-Opener-Policy', 'same-origin');
         return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
       })
       .catch(() => new Response(null, { status: 500 }))

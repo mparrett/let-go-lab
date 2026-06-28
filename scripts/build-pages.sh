@@ -30,6 +30,8 @@ BUILD="$LAB/dist/$DEMO"
 [[ -f "$LGFILE" ]]     || { echo "build-pages: no demo at $LGFILE" >&2; exit 1; }
 [[ -f "$SHELL_HTML" ]] || { echo "build-pages: no shell at $SHELL_HTML" >&2; exit 1; }
 [[ -x "$LG" ]]         || { echo "build-pages: no lg at $LG (set LETGO=<path>)" >&2; exit 1; }
+"$LG" -h 2>&1 | grep -q -- '-w-shell' || {
+  echo "build-pages: $LG predates -w-shell (#245); point LETGO at upstream main or later" >&2; exit 1; }
 
 echo "==> build: $LG -w -w-shell none $DEMO.lg"
 mkdir -p "$BUILD"
