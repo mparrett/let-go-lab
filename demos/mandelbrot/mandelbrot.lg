@@ -1,6 +1,6 @@
 ;; mandelbrot.lg — standalone let-go WASM demo: an escape-time Mandelbrot set
 ;; rendered as sixel graphics inside xterm.js (via @xterm/addon-image, loaded
-;; by dev/shell-sixel.html). No <canvas>, no WebGL — the image is a sixel DCS
+;; by demos/mandelbrot/shell.html). No <canvas>, no WebGL — the image is a sixel DCS
 ;; string the VM prints with term/write, decoded by the terminal.
 ;;
 ;; Pipeline: (term/write s) -> *out* -> HostWriter -> LetGoHost.onOutput ->
@@ -164,7 +164,7 @@
 ;; row. The multi-pass predecessor re-read every cell once per color (~16× on a
 ;; ~15-colour band); this touches each cell once. Color iteration order differs
 ;; from a set scan, but per-color rows and total bytes are identical (each pixel
-;; has exactly one colour; overlay is commutative). See the workspace perf note.
+;; has exactly one colour; overlay is commutative).
 (defn encode-band [grid b scale width]
   (let [y0 (* b 6)
         ;; Division hoist: the old per-cell grid-at did two `quot`s for each of
@@ -238,7 +238,7 @@
         (apply str (conj acc (str ESC "\\")))
         (recur (inc b) (conj acc (encode-band grid b scale width)))))))
 
-;; Private OSC the browser shell (dev/shell-sixel.html) watches to dim the whole
+;; Private OSC the browser shell (demos/mandelbrot/shell.html) watches to dim the whole
 ;; terminal while a frame computes, then pop it bright when the new image lands.
 ;; Native terminals ignore an unknown OSC, so the same code drives TTY and wasm.
 (defn computing-cue [on]
@@ -572,11 +572,11 @@
 
 ;; Headless bench: render BENCH-FRAMES frames of the fixed home view (no TTY,
 ;; no input, no sixel write), printing per-frame compute/encode timing + the
-;; iters/sec throughput. This is the profiling driver — run it under the
-;; in-flight lg profiling flags (PR #303):
-;;   lg -cpuprofile=cpu.pprof dev/mandelbrot.lg </dev/null
-;;   lg -memprofile=mem.pprof dev/mandelbrot.lg </dev/null   # alloc/boxing
+;; iters/sec throughput. Triggered by any non-TTY run:
+;;   lg demos/mandelbrot/mandelbrot.lg </dev/null
 ;; compute = VM arithmetic/dispatch; encode = sixel encoder (subs/nth/conj).
+;; A Go cpu/mem profile needs an lg built with profiling flags, which upstream
+;; main doesn't carry yet (let-go PR #303) — the bench itself runs on stock lg.
 (def bench-frames 20)
 
 (defn run-bench []
