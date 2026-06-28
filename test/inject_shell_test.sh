@@ -25,7 +25,7 @@ make_index() { printf '<html><body>\n<script>window.LetGoHost={}</script>\n</bod
 make_shell() { printf '<style>#x{}</style>\n<script>/*shell %s*/</script>\n' "${1:-A}" > "$2"; }
 
 count() { grep -cF "$1" "$2" 2>/dev/null || true; }
-mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null; }
+mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }  # GNU first, BSD fallback
 
 # 1. First injection succeeds with exactly one matched pair + surviving </body>.
 idx="$tmp/i1.html"; sh="$tmp/s1.html"; make_index "$idx"; make_shell "A" "$sh"
