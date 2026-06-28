@@ -22,6 +22,18 @@
   @media (orientation: landscape) { body { justify-content: center; } }
   /* transition eases the pop-to-bright when a freshly computed frame lands */
   #terminal { flex: 0 0 auto; transition: filter 0.15s ease-out; }
+  /* Touch-only ⌨ toggle (created in JS): re-summons the soft keyboard we
+     suppress by default, so the keyboard controls (hjkl ,. r q) stay reachable
+     on a phone. Floats over the top-right corner; .on marks it active. */
+  #kbd-toggle {
+    position: fixed; top: 10px; right: 10px; z-index: 10;
+    width: 40px; height: 40px; padding: 0;
+    font-size: 20px; line-height: 40px; text-align: center;
+    border: 1px solid #444; border-radius: 8px;
+    background: rgba(20, 20, 20, 0.7); color: #cfcfcf;
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+  }
+  #kbd-toggle.on { background: rgba(60, 120, 200, 0.85); color: #fff; border-color: #6aa; }
 </style>
 <script>
   (function () {
@@ -138,6 +150,28 @@
       // fire, so desktop hjkl/+/- controls are unaffected.
       const helperTextarea = termEl.querySelector(".xterm-helper-textarea");
       if (helperTextarea) helperTextarea.setAttribute("inputmode", "none");
+      // Suppressing the keyboard also hides the keyboard-only controls (hjkl ,.
+      // r q — tap covers only recenter+zoom-in). On touch devices, add a ⌨
+      // toggle that summons the keyboard on demand: flip inputmode back to text
+      // and focus INSIDE the click (the user gesture iOS needs to raise the
+      // keyboard); tap again to dismiss. Desktop has a real keyboard, so skip it.
+      const isTouch = matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
+      if (isTouch && helperTextarea) {
+        const kbdBtn = document.createElement("button");
+        kbdBtn.id = "kbd-toggle";
+        kbdBtn.type = "button";
+        kbdBtn.textContent = "⌨";
+        kbdBtn.setAttribute("aria-label", "Toggle keyboard");
+        document.body.appendChild(kbdBtn);
+        let kbdOn = false;
+        kbdBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          kbdOn = !kbdOn;
+          helperTextarea.setAttribute("inputmode", kbdOn ? "text" : "none");
+          kbdBtn.classList.toggle("on", kbdOn);
+          if (kbdOn) helperTextarea.focus(); else helperTextarea.blur();
+        });
+      }
       relayout();
       term.focus();
       // Read-only test hook: lets the viewport/click test read a status row's
