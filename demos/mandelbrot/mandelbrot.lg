@@ -81,6 +81,11 @@
 ;; out and the wheel aren't available — see the loop-keys left-press branch).
 (def zoom-zone 0.2)
 
+;; One zoom tick (key / wheel / central tap): zoom IN multiplies the view width
+;; by this, zoom OUT divides by it. 0.7 ≈ a 1.4× step — gentle enough that
+;; repeated taps don't overshoot.
+(def zoom-factor 0.7)
+
 ;; --- Sixel data chars: index m (0..63) -> the char (m+63), as a 1-char str.
 ;; Precomputed into a vector so sixchar is an O(1) nth, not a per-call `subs`
 ;; that allocates a fresh substring every time — it's hot (once per RLE run).
@@ -268,17 +273,20 @@
         gi (compute-grid cx cy vw mi)
         grid (first gi)
         iters (second gi)
-        t1 (inst-ms (now))]
+        t1 (inst-ms (now))
+        width (img-w scale)
+        height (img-h scale)
+        bands (quot height 6)]
     ;; Un-dim as the new frame STARTS painting (batched with the first band's
     ;; flush below), not after it finishes — otherwise the new fractal paints
     ;; dimmed for the whole ~emit and then pops. The dim covers only the compute
     ;; stall; the reveal is bright.
     (computing-cue false)
     (term/move-cursor COL0 IMG-ROW0)      ; image at (COL0, IMG-ROW0) — left + top margin
-    (term/write (str ESC "Pq" "\"1;1;" (img-w scale) ";" (img-h scale) palette-defs))
+    (term/write (str ESC "Pq" "\"1;1;" width ";" height palette-defs))
     (loop [b 0]
-      (when (< b (quot (img-h scale) 6))
-        (term/write (encode-band grid b scale (img-w scale)))
+      (when (< b bands)
+        (term/write (encode-band grid b scale width))
         (term/flush)                      ; stream each band as it finishes
         (recur (inc b))))
     (term/write (str ESC "\\"))
@@ -376,13 +384,15 @@
         [(+ (- cx (/ vw 2.0)) (* fx vw))
          (+ (- cy (/ vh 2.0)) (* fy vh))]))))
 
+;; term/size or a sane [cols rows] fallback — it's nil only on a non-TTY native
+;; run (the click mappers never run there, but the guard keeps them total).
+(defn term-size-or [] (let [sz (term/size)] (if sz sz [80 24])))
+
 ;; BROWSER path: the content-sized shell sizes the terminal to image+chrome, so
 ;; the image's cell extent is known exactly — cols−(COL0−1) wide from COL0, and
 ;; rows−CHROME-ROWS tall from IMG-ROW0.
 (defn click->center [cx cy vw mx my]
-  (let [sz (term/size)
-        cols (if sz (nth sz 0) 80)
-        rows (if sz (nth sz 1) 24)
+  (let [[cols rows] (term-size-or)
         img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
         img-rows (max 1 (- rows CHROME-ROWS))]
     (map-click cx cy vw mx my img-cols img-rows)))
@@ -496,9 +506,7 @@
   (let [cw (nth cell 0) ch (nth cell 1)
         img-cols (int (math/ceil (/ (float (img-w home-scale)) (float cw))))
         img-rows (int (math/ceil (/ (float (img-h home-scale)) (float ch))))
-        sz (term/size)
-        cols (if sz (nth sz 0) 80)
-        rows (if sz (nth sz 1) 24)]
+        [cols rows] (term-size-or)]
     (when (and (>= cols (+ (dec COL0) img-cols))
                (>= rows (+ CHROME-ROWS img-rows)))
       (map-click cx cy vw mx my img-cols img-rows))))
@@ -523,8 +531,8 @@
         ;; Browser resize: re-render at the shell's fitted scale. This also wakes
         ;; this otherwise-blocked read-key (setSize alone doesn't notify it).
         rs (recur cx cy vw mi rs)
-        (or (= k "+") (= k "=")) (recur cx cy (* vw 0.7) mi scale)
-        (or (= k "-") (= k "_")) (recur cx cy (/ vw 0.7) mi scale)
+        (or (= k "+") (= k "=")) (recur cx cy (* vw zoom-factor) mi scale)
+        (or (= k "-") (= k "_")) (recur cx cy (/ vw zoom-factor) mi scale)
         (or (= k "h") (= k left-key)) (recur (- cx pan) cy vw mi scale)
         (or (= k "l") (= k right))    (recur (+ cx pan) cy vw mi scale)
         (or (= k "k") (= k up))       (recur cx (- cy pan) vw mi scale)
@@ -533,8 +541,8 @@
         (= k ",") (recur cx cy vw (max mi-min (- mi mi-step)) scale)   ; less detail, faster
         (= k "r") (recur home-x home-y home-w home-maxiter scale)     ; reset view, keep scale
         ;; Wheel zooms (position-independent → works everywhere, both targets).
-        (and me (= (:button me) :wheel-up))   (recur cx cy (* vw 0.7) mi scale)
-        (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw 0.7) mi scale)
+        (and me (= (:button me) :wheel-up))   (recur cx cy (* vw zoom-factor) mi scale)
+        (and me (= (:button me) :wheel-down)) (recur cx cy (/ vw zoom-factor) mi scale)
         ;; Left-press always recenters on the tapped point; whether it also zooms
         ;; depends on where the tap landed (see zoom-zone): a central tap zooms
         ;; IN, an off-center tap only pans (recenter, same vw), and shift forces
@@ -556,8 +564,8 @@
                   off (max (math/abs (/ (- px cx) vw))
                            (math/abs (/ (- py cy) vh)))
                   vw' (cond
-                        (:shift me)         (/ vw 0.7)    ; explicit zoom out
-                        (<= off zoom-zone)  (* vw 0.7)    ; central tap → zoom in
+                        (:shift me)         (/ vw zoom-factor)    ; explicit zoom out
+                        (<= off zoom-zone)  (* vw zoom-factor)    ; central tap → zoom in
                         :else               vw)]          ; off-center → pan only
               (recur px py vw' mi scale))
             (recur cx cy vw mi scale)))         ; unmappable click — ignore
