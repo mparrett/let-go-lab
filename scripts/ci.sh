@@ -88,7 +88,12 @@ else
     sleep 1
   done
   if [[ "$up" == 1 ]]; then
-    run "viewport-fit" python3 test/viewport_fit_test.py "http://localhost:$PORT/"
+    # The test exits 77 when playwright isn't importable — treat that as an
+    # absent required tool (skip lenient / fail strict), not a pass.
+    python3 test/viewport_fit_test.py "http://localhost:$PORT/"; rc=$?
+    if [[ "$rc" -eq 0 ]]; then echo "PASS: viewport-fit"
+    elif [[ "$rc" -eq 77 ]]; then absent "viewport-fit" "playwright not installed"
+    else echo "FAIL: viewport-fit"; fails=$((fails + 1)); fi
   else
     echo "FAIL: server did not come up"; fails=$((fails + 1)); cat /tmp/ci-serve.log
   fi
