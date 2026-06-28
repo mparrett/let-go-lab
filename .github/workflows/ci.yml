@@ -1,0 +1,57 @@
+name: ci
+
+# Smoke suite (#10): protocol/lifecycle/browser boundaries that have produced
+# regressions. Runs scripts/ci.sh, which orchestrates the focused tests under
+# test/. GitHub sets CI=true, so ci.sh runs in STRICT mode here — a missing
+# expected test or tool fails the build (locally it soft-skips). Tool/dependency
+# versions and the let-go commit are pinned so CI is reproducible.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Pinned let-go commit (nooga/let-go main). The lab never builds lg itself; it
+  # runs a stock upstream build (the demos need #245 -w-shell + #313 SGR mouse,
+  # both merged). Pinning a tested SHA keeps CI reproducible — an unrelated
+  # upstream commit can't change/break this repo's CI. To bump: pick a newer
+  # nooga/let-go main SHA, build + run `scripts/ci.sh` against it locally, then
+  # update this value. Validated 2026-06-27 (demo builds, bench + suite pass).
+  LETGO_PIN: 5ba842f59f5e75fe6681eca7a005ecdd3da5fdf5
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install jq + shellcheck
+        run: sudo apt-get update && sudo apt-get install -y jq shellcheck
+
+      - name: Install Playwright (chromium)
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      # Build the pinned upstream let-go (LETGO_PIN) and point LETGO at it.
+      # Full clone (not --depth 1) so the exact pinned SHA is fetchable.
+      - name: Build let-go (pinned upstream)
+        run: |
+          git clone https://github.com/nooga/let-go let-go-upstream
+          git -C let-go-upstream checkout "$LETGO_PIN"
+          make -C let-go-upstream build
+          ln -sfn "$PWD/let-go-upstream" let-go
+          ./let-go/lg --version || true
+
+      - name: Smoke suite
+        run: scripts/ci.sh
