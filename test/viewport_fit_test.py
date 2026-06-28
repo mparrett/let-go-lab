@@ -67,14 +67,37 @@ def wait_settled(pg, timeout=SETTLE_TIMEOUT):
     return None
 
 
-def load(p, w, h):
+def new_page(p, w, h):
+    """Launch a chromium page at the given viewport with error capture wired and
+    the document loaded. Returns (page, errs); errs accumulates pageerror +
+    console-error text for the caller to assert on."""
     pg = p.chromium.launch().new_context(viewport={"width": w, "height": h}).new_page()
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
     pg.goto(URL, wait_until="networkidle", timeout=30000)
+    return pg, errs
+
+
+def load(p, w, h):
+    pg, errs = new_page(p, w, h)
     wait_settled(pg)   # first fitted frame done before any interaction
     return pg, errs
+
+
+def coords_after(pg, before, timeout=SETTLE_TIMEOUT):
+    """Poll the coords row until it settles to a value DIFFERENT from `before`
+    (the post-input frame landed), or timeout. Replaces a fixed sleep that waited
+    for the transient 'computing…' marker to clear — adapts to render duration
+    instead of guessing it."""
+    waited = 0
+    while waited <= timeout:
+        c = coords(pg, timeout=2000)
+        if c and c != before:
+            return c
+        pg.wait_for_timeout(300)
+        waited += 300
+    return coords(pg)
 
 
 def check_viewport(p, tag, w, h, want_scale):
@@ -100,8 +123,7 @@ def check_viewport(p, tag, w, h, want_scale):
         hx, hy, hzoom = home
         box = image_box(pg)
         pg.mouse.click(box["x"] + box["w"] * 0.5, box["y"] + box["h"] * 0.45)
-        pg.wait_for_timeout(1500)  # let "computing…" overwrite the old coords first
-        c = coords(pg)
+        c = coords_after(pg, home)   # poll for the post-click frame to land
         if not c:
             fails.append(f"{tag}: no coords after center click")
         else:
@@ -120,8 +142,7 @@ def check_viewport(p, tag, w, h, want_scale):
     base = coords(pg2)
     box2 = image_box(pg2)
     pg2.mouse.click(box2["x"] + box2["w"] * 0.20, box2["y"] + box2["h"] * 0.45)
-    pg2.wait_for_timeout(1500)  # let "computing…" overwrite the old coords first
-    left = coords(pg2)
+    left = coords_after(pg2, base)   # poll for the post-click frame to land
     if base and left and not (left[0] < base[0]):
         fails.append(f"{tag}: left click did not decrease x ({base[0]}->{left[0]})")
     pg2.context.browser.close()
@@ -144,11 +165,7 @@ def check_resize_race(p):
     it land. The buggy version (ack-on-send) never retries and stays mismatched.
     """
     fails = []
-    pg = p.chromium.launch().new_context(viewport={"width": 1280, "height": 900}).new_page()
-    errs = []
-    pg.on("pageerror", lambda e: errs.append(str(e)))
-    pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
-    pg.goto(URL, wait_until="networkidle", timeout=30000)
+    pg, errs = new_page(p, 1280, 900)
     start = wait_settled(pg)   # parked at read-key, slot free
     if start != 3:
         fails.append(f"race: expected initial rendered scale 3, got {start}")
