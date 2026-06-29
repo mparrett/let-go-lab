@@ -11,14 +11,17 @@ on:
   pull_request:
 
 env:
-  # Pinned let-go commit (nooga/let-go main). The lab never builds lg itself; it
-  # runs a stock upstream build (the demos need #245 -w-shell + #313 SGR mouse,
-  # both merged). Pinning a tested SHA keeps CI reproducible — an unrelated
-  # upstream commit can't change/break this repo's CI. To bump: pick a newer
-  # nooga/let-go main SHA, build + run `scripts/ci.sh` against it locally, then
-  # update this value. Validated 2026-06-28 (demo builds, bench + suite pass;
-  # ~24% faster frame / encode −31% vs the prior pin, output byte-identical).
-  LETGO_PIN: 723fe22f28c26b5c087e474b96b5a9f43f2bf104
+  # Pinned let-go RELEASE (nooga/let-go). The lab never builds lg itself; it runs
+  # a stock upstream build. v1.11.0 is the first tagged release carrying the
+  # client-owned shell (-w-shell, #245), SGR mouse input (#313), and the IR/
+  # lowering perf gains the sixel encoder benefits from — so it's also the
+  # supported version floor (see README / CLAUDE.md). Pinning a tag keeps CI
+  # reproducible while naming that floor; the full clone below fetches tags, so
+  # `git checkout` resolves it. To bump: pick a newer tag, build + run
+  # `scripts/ci.sh` against it locally, then update this value. Validated
+  # 2026-06-28 (demo builds, bench + suite pass; bytes=27695).
+  # Resolved SHA: f9048d899a740364b2aeb9a3ee046f8ea9956c5b
+  LETGO_PIN: v1.11.0
 
 jobs:
   smoke:
@@ -45,7 +48,7 @@ jobs:
           python -m playwright install --with-deps chromium
 
       # Build the pinned upstream let-go (LETGO_PIN) and point LETGO at it.
-      # Full clone (not --depth 1) so the exact pinned SHA is fetchable.
+      # Full clone (not --depth 1) so the pinned tag/SHA is fetchable.
       - name: Build let-go (pinned upstream)
         run: |
           git clone https://github.com/nooga/let-go let-go-upstream

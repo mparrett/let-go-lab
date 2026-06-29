@@ -28,7 +28,10 @@ This repo never builds lg — it only runs it. Point it at one of:
 - `LETGO=/path/to/let-go just serve …` to override per-invocation.
 
 The demos need an lg carrying the client-owned shell (the `-w-shell` flag, #245)
-and SGR mouse input (#313) — both are on let-go's `main`, so a stock build works.
+and SGR mouse input (#313). **Use let-go ≥ 1.11.0** — the first tagged release
+with both, plus the IR/lowering perf gains the sixel encoder benefits from. A
+newer `main` works too; CI pins the `v1.11.0` tag (`.github/workflows/ci.yml`),
+and the build path feature-probes for `-w-shell`, failing clearly if it's absent.
 
 ## Recipes (`just`)
 
