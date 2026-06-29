@@ -14,21 +14,24 @@ Same workload (160×120 grid, maxiter 96, the demo's home view), three ways:
 | Encode (sixel) | ~120 ms | 1.4 ms | ~83× | no — boxes to `vm.Value` |
 | Frame | ~217 ms | 2.7 ms | ~81× | partial |
 
-The compute kernel lowers to a native `float64` loop: ~56× as actual AOT output,
-~79× as hand-written Go (the ceiling). The encoder can't lower today, but the
-hand-written native port shows the boxing-heavy half is the bigger prize — ~83×
-sits unrealized there. Two upstream findings came out of the spike:
+The compute kernel lowers to a native `float64` loop, and the AOT output benches
+within noise of the hand-written port (~1.3 ms, ~70× over interpreted) — for pure
+arithmetic the lowering is near-optimal. The encoder can't lower today, but the
+native port shows the boxing-heavy half is the bigger prize: ~83× sits unrealized
+there. Two upstream findings came out of the spike:
 [nooga/let-go#357](https://github.com/nooga/let-go/issues/357) and
 [#358](https://github.com/nooga/let-go/issues/358).
 
 ## Layout
 
 ```
-kernel/  mandel_kernel.lg  shaped-to-lower bench kernel (escape-time sum)
-         mandel_drive.lg   runs it interpreted, for the baseline
-native/  native.go         hand-written Go port of compute + sixel encode
-         native_test.go    byte-equivalence check + benchmarks (standalone module)
-repro/   repro.lg          8-line repro for the #357 param-typing bug
+kernel/  mandel_kernel.lg   shaped-to-lower bench kernel (escape-time sum)
+         mandel_drive.lg    runs it interpreted, for the baseline
+         aot_bench_test.go  bench dropped into the lg-compile output package
+         regen-aot.sh       lower + bench the kernel against a let-go checkout
+native/  native.go          hand-written Go port of compute + sixel encode
+         native_test.go     byte-equivalence check + benchmarks (standalone module)
+repro/   repro.lg           8-line repro for the #357 param-typing bug
 ```
 
 ## Reproduce
@@ -47,12 +50,15 @@ Interpreted baseline — needs an `lg` (the repo symlink, or on PATH):
 lg -source-paths kernel kernel/mandel_drive.lg
 ```
 
-AOT lowering — needs a let-go ≥ 1.11.0 checkout, with `mandel_kernel.lg` copied in:
+AOT lowering + bench — needs a let-go ≥ 1.11.0 checkout with a built `lg`:
 
 ```sh
-./lg scripts/lg-compile out github.com/nooga/let-go/out mandel_kernel.lg
-go build ./out/...
+kernel/regen-aot.sh /path/to/let-go   # or set LETGO=, or rely on the ./let-go symlink
 ```
+
+It lowers `mandel_kernel.lg` with `lg-compile`, drops `aot_bench_test.go` into the
+generated package, and benches it — the AOT output lands ~1.3 ms, within noise of
+the hand-written native port.
 
 `mandel_kernel.lg` is shaped to lower cleanly — the view is baked as float
 literals and the per-pixel position is carried as float accumulators — so no
