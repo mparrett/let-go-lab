@@ -1,0 +1,15 @@
+(ns repro)
+
+;; Minimal repro for let-go#357. `a` is only ever added to a float64 (z), so it
+;; must be float64 -- but type inference types the param as int, so lowering
+;; emits  z /*float64*/ = z + a /*int*/  which does not compile (mismatched
+;; types float64 and int). The return type is inferred float64 correctly; the
+;; float constraint just isn't back-propagated to the parameter.
+;;
+;;   ./lg scripts/lg-compile out github.com/nooga/let-go/out repro.lg
+;;   go build ./out/...   # invalid operation: z + arg0 (mismatched float64/int)
+(defn add-to-float [a]
+  (loop [z 1.5]
+    (if (> z 100.0)
+      z
+      (recur (+ z a)))))

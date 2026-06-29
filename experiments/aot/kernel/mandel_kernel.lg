@@ -1,0 +1,28 @@
+(ns mandel-kernel)
+
+;; Fully-lowerable bench kernel: the fixed home view (cx=-0.6 cy=0 vw=3.2,
+;; 160x120 grid -> cstep=0.02, left=-2.2, top=-1.2) baked as float LITERALS, and
+;; the per-pixel position carried as float accumulators (px,im) instead of
+;; (float i)*cstep -- so there are no int->float casts (which trampoline through
+;; clojure.core/float and poison the chain to vm.Value) and no float params.
+;; Everything float is a local from float literals; everything int is an int
+;; counter. Returns the total iteration count over the grid.
+;;
+;; Shaped this way to dodge the two AOT gaps (see ../README.md): float params
+;; typed as int (let-go#357) and int->float casts forcing trampolines.
+(defn mandel-bench [maxiter]
+  (loop [j 0 im -1.2 sum 0]
+    (if (>= j 120)
+      sum
+      (let [rsum (loop [i 0 px -2.2 s sum]
+                   (if (>= i 160)
+                     s
+                     (let [it (loop [zx 0.0 zy 0.0 k 0]
+                                (let [zx2 (* zx zx) zy2 (* zy zy)]
+                                  (if (or (>= k maxiter) (> (+ zx2 zy2) 4.0))
+                                    k
+                                    (recur (+ (- zx2 zy2) px)
+                                           (+ (* 2.0 (* zx zy)) im)
+                                           (inc k)))))]
+                       (recur (inc i) (+ px 0.02) (+ s it)))))]
+        (recur (inc j) (+ im 0.02) rsum)))))

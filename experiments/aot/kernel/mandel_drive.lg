@@ -1,0 +1,13 @@
+(ns mandel-drive (:require [mandel-kernel]))
+
+;; Interpreted baseline: time (mandel-bench 96) -- the SAME kernel the AOT path
+;; lowers -- over a few frames, comparable to the demo's compute phase and to
+;; the native Go benchmark in ../native.
+;;   lg -source-paths experiments/aot/kernel experiments/aot/kernel/mandel_drive.lg
+(loop [k 0]
+  (when (< k 10)
+    (let [t0 (inst-ms (now))
+          r  (mandel-kernel/mandel-bench 96)
+          t1 (inst-ms (now))]
+      (println (str "interp frame " k "  compute=" (- t1 t0) "ms  iters=" r)))
+    (recur (inc k))))
