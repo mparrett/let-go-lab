@@ -1,0 +1,146 @@
+<!--
+  Client-owned shell for the pathtrace demo, bound to let-go ONLY through
+  window.LetGoHost (onReady/onOutput/sendInput/setSize). Adds @xterm/addon-image,
+  which decodes the iTerm2 inline-image escapes (OSC 1337) the .lg writes — the
+  image is a base64 PNG the program encodes itself (no sixel here). Content-sized
+  to the image; baked into the bundle by inject-shell.sh.
+
+  Simpler than the mandelbrot shell: there's no sixel "scale" handshake. The PNG
+  is rendered small and the IIP escape asks the terminal to display it at a fixed
+  pixel size, so the shell only has to size the terminal to fit that image + the
+  text chrome. The program announces the on-screen image size via OSC 5002.
+-->
+<!-- xterm CSS/JS + addons. harness/inline-assets.sh replaces this marker with the
+     committed harness/vendor/xterm@5.5.0 files inlined (self-contained, offline).
+     The vendored .min.js are UMD builds exposing Terminal / FitAddon / ImageAddon. -->
+<!--LETGO-LAB-XTERM-ASSETS-->
+<style>
+  html, body { background: #000; margin: 0; height: 100%; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
+  @media (orientation: landscape) { body { justify-content: center; } }
+  #terminal { flex: 0 0 auto; }
+  /* Touch-only ⌨ toggle: re-summons the soft keyboard so the keyboard controls
+     (hjkl n r q) stay reachable on a phone. */
+  #kbd-toggle {
+    position: fixed; top: 10px; right: 10px; z-index: 10;
+    width: 40px; height: 40px; padding: 0;
+    font-size: 20px; line-height: 40px; text-align: center;
+    border: 1px solid #444; border-radius: 8px;
+    background: rgba(20, 20, 20, 0.7); color: #cfcfcf;
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+  }
+  #kbd-toggle.on { background: rgba(60, 120, 200, 0.85); color: #fff; border-color: #6aa; }
+</style>
+<script>
+  (function () {
+    const term = new Terminal({
+      fontFamily: '"IBM Plex Mono", Menlo, Consolas, monospace',
+      fontSize: 14,
+      theme: { background: '#000', foreground: '#cfcfcf', cursor: '#000' },
+      allowProposedApi: true,   // required by addon-image
+      convertEol: false,        // the .lg emits explicit \r\n
+      scrollback: 0,
+    });
+    const fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+
+    // addon-image: IIP (iTerm2 inline images) is enabled by default; that's the
+    // path this demo uses. sixel left on too (harmless), limits bumped so a full
+    // image isn't truncated.
+    const image = new ImageAddon.ImageAddon({
+      pixelLimit: 4096 * 4096,
+      iipSizeLimit: 25_000_000,
+    });
+    term.loadAddon(image);
+
+    // Geometry. pathtrace.lg owns it and announces it via OSC 5002 (parsed in
+    // onOutput below): IMG_W × IMG_H are the ON-SCREEN image pixels, plus the
+    // chrome row count and left margin. These fallbacks equal the program's
+    // defaults so the first layout is already right.
+    let IMG_W = 320, IMG_H = 240, CHROME_ROWS = 8, MARGIN_COLS = 1;
+
+    function cellDims() {
+      try {
+        const d = term._core._renderService.dimensions.css.cell;
+        if (d && d.width && d.height) return { w: d.width, h: d.height };
+      } catch (_) {}
+      const f = term.options.fontSize;
+      return { w: 0.6 * f, h: 1.2 * f };
+    }
+
+    function gridFor(cell) {
+      return {
+        cols: Math.ceil(IMG_W / cell.w) + MARGIN_COLS,
+        rows: Math.ceil(IMG_H / cell.h) + CHROME_ROWS,
+      };
+    }
+
+    let pending;
+    function relayout() {
+      const termEl = document.getElementById("terminal");
+      termEl.style.width = "100vw";
+      termEl.style.height = "100vh";          // full viewport so fit() seeds cell metrics
+      fit.fit();
+      const cell = cellDims();
+      const g = gridFor(cell);
+      term.resize(g.cols, g.rows);
+      termEl.style.width = Math.ceil(cell.w * g.cols) + "px";
+      termEl.style.height = Math.ceil(cell.h * g.rows) + "px";
+      if (window.LetGoHost && window.LetGoHost.setSize) window.LetGoHost.setSize(g.cols, g.rows);
+      window.__lgGrid = g.cols + "x" + g.rows;
+    }
+    function scheduleRelayout() { clearTimeout(pending); pending = setTimeout(relayout, 100); }
+
+    window.LetGoHost.onReady((mode) => {
+      const statusEl = document.getElementById("status");
+      if (statusEl) statusEl.style.display = "none";
+      const termEl = document.getElementById("terminal");
+      termEl.style.display = "block";
+      term.open(termEl);
+
+      // Suppress the soft keyboard by default (no physical keyboard on a phone),
+      // with a ⌨ toggle to summon it for the hjkl/n/r/q controls. Desktop keeps
+      // its real keyboard (inputmode=none hides only the on-screen one).
+      const helperTextarea = termEl.querySelector(".xterm-helper-textarea");
+      if (helperTextarea) helperTextarea.setAttribute("inputmode", "none");
+      const isTouch = matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
+      if (isTouch && helperTextarea) {
+        const kbdBtn = document.createElement("button");
+        kbdBtn.id = "kbd-toggle"; kbdBtn.type = "button"; kbdBtn.textContent = "⌨";
+        kbdBtn.setAttribute("aria-label", "Toggle keyboard");
+        document.body.appendChild(kbdBtn);
+        let kbdOn = false;
+        kbdBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          kbdOn = !kbdOn;
+          helperTextarea.setAttribute("inputmode", kbdOn ? "text" : "none");
+          kbdBtn.classList.toggle("on", kbdOn);
+          if (kbdOn) helperTextarea.focus(); else helperTextarea.blur();
+        });
+      }
+
+      relayout();
+      term.focus();
+
+      window.LetGoHost.onOutput((s) => {
+        // Geometry announcement (OSC 5002;IMG_W;IMG_H;CHROME;COL0). The program is
+        // the single source of truth; adopt and relayout. Stripped before write.
+        s = s.replace(/\x1b\]5002;(\d+);(\d+);(\d+);(\d+)\x07/g, (_m, iw, ih, chrome, col0) => {
+          IMG_W = +iw; IMG_H = +ih; CHROME_ROWS = +chrome; MARGIN_COLS = +col0 - 1;
+          scheduleRelayout();
+          return "";
+        });
+        term.write(s);
+      });
+
+      if (mode === "worker") {
+        term.onResize(({ cols, rows }) => window.LetGoHost.setSize(cols, rows));
+        term.onData((d) => window.LetGoHost.sendInput(d));
+      }
+    });
+
+    window.addEventListener("resize", scheduleRelayout);
+    window.addEventListener("orientationchange", scheduleRelayout);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", scheduleRelayout);
+  })();
+</script>
