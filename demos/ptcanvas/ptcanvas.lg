@@ -192,7 +192,10 @@
     (println (str "  speedup (scalar/vec3): " (round3 (/ r1 r2)) "x"))))
 
 ;; ===== canvas display (browser) =====
-(def RES 192)
+;; Modest render res so the first browser pass lands in a few seconds (the smallpt
+;; scene's 10 spheres make each ray ~2× our scene; the canvas upscales it). Compute
+;; dominates, so this is the responsiveness knob (see dev notes).
+(def RES 96)
 (def max-spp 512)
 (def up (str (char 27) "[A")) (def down (str (char 27) "[B"))
 
@@ -233,8 +236,11 @@
             spp' (if refine? (inc spp) spp)
             compute-ms (- (inst-ms (now)) t0)]
         (when refine?
-          (surface/present (tonemap-rgba accum spp') RES RES)
-          (js/emit :status {:spp spp' :w RES :h RES :compute compute-ms}))
+          (let [pt0 (inst-ms (now))
+                fb (tonemap-rgba accum spp')]
+            (surface/present fb RES RES)
+            (js/emit :status {:spp spp' :w RES :h RES :compute compute-ms
+                              :present (- (inst-ms (now)) pt0)})))
         (if (and refine? (not (term/key-pending?)))
           (recur accum spp')
           (let [k (term/read-key)]

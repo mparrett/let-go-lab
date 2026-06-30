@@ -29,7 +29,7 @@
 
       const title = document.createElement("div");
       title.id = "pt-title";
-      title.textContent = "ptcanvas · let-go → <canvas> (surface) · hjkl orbit · n scene · r reset · q quit";
+      title.textContent = "ptcanvas · let-go → <canvas> · allocation-free PT · r reset · q quit";
       const canvas = document.createElement("canvas");
       canvas.id = "pt-canvas";
       const status = document.createElement("div");
@@ -50,8 +50,7 @@
       window.LetGoHost.onEmit((name, d) => {
         if (name !== "status") return;
         status.textContent =
-          `scene ${d.scene} · ${d.spp} spp · ${d.w}×${d.h}   ·   ` +
-          `compute ${d.compute}ms · present ${d.present}ms /pass`;
+          `${d.spp} spp · ${d.w}×${d.h}   ·   compute ${d.compute}ms · present ${d.present}ms /pass`;
       });
 
       // Keyboard → VM input ring. Single chars pass through; arrows become CSI.
