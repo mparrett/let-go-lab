@@ -1,0 +1,70 @@
+<!--
+  Canvas shell for the ptcanvas spike. No xterm: the path tracer writes an RGBA
+  framebuffer through the let-go `surface` capability, and this shell blits it to a
+  <canvas> via putImageData (LetGoHost.onSurface). Status text arrives out-of-band
+  via js/emit (LetGoHost.onEmit); keystrokes go back through LetGoHost.sendInput.
+
+  The xterm-assets marker below is required by the build (harness/inline-assets.sh)
+  and harmless — those globals just go unused here.
+-->
+<!--LETGO-LAB-XTERM-ASSETS-->
+<style>
+  html, body { background: #0b0b0b; margin: 0; height: 100%; color: #cfcfcf;
+    font-family: "IBM Plex Mono", Menlo, Consolas, monospace; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+  #pt-canvas {
+    image-rendering: pixelated;            /* crisp integer upscale of the small render */
+    background: #000; border: 1px solid #222;
+    width: min(90vw, 640px); height: auto; aspect-ratio: 4 / 3;
+  }
+  #pt-status { font-size: 13px; color: #9a988f; white-space: pre; text-align: center; }
+  #pt-title { font-size: 13px; color: #cfcfcf; }
+</style>
+<script>
+  (function () {
+    function start() {
+      // The base lg page ships #terminal/#status; we don't use them.
+      const t = document.getElementById("terminal"); if (t) t.style.display = "none";
+      const s = document.getElementById("status"); if (s) s.style.display = "none";
+
+      const title = document.createElement("div");
+      title.id = "pt-title";
+      title.textContent = "ptcanvas · let-go → <canvas> (surface) · hjkl orbit · n scene · r reset · q quit";
+      const canvas = document.createElement("canvas");
+      canvas.id = "pt-canvas";
+      const status = document.createElement("div");
+      status.id = "pt-status";
+      status.textContent = "starting…";
+      document.body.append(title, canvas, status);
+
+      const ctx = canvas.getContext("2d");
+
+      // Surface sink: the transferred ArrayBuffer is RGBA, w*h*4. Wrap it
+      // zero-copy as a Uint8ClampedArray, make ImageData, blit. No decode.
+      window.LetGoHost.onSurface((buf, w, h) => {
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
+      });
+
+      // Status events from (js/emit :status {...}).
+      window.LetGoHost.onEmit((name, d) => {
+        if (name !== "status") return;
+        status.textContent =
+          `scene ${d.scene} · ${d.spp} spp · ${d.w}×${d.h}   ·   ` +
+          `compute ${d.compute}ms · present ${d.present}ms /pass`;
+      });
+
+      // Keyboard → VM input ring. Single chars pass through; arrows become CSI.
+      const CSI = { ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D" };
+      window.addEventListener("keydown", (e) => {
+        const seq = CSI[e.key] || (e.key.length === 1 ? e.key : "");
+        if (seq && window.LetGoHost.sendInput(seq)) e.preventDefault();
+      });
+
+      // A default size so the worker's size handshake (if any) is satisfied.
+      if (window.LetGoHost.setSize) window.LetGoHost.setSize(80, 24);
+    }
+
+    window.LetGoHost.onReady(() => start());
+  })();
+</script>

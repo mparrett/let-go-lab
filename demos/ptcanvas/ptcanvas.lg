@@ -1,0 +1,175 @@
+;; ptcanvas.lg — canvas spike: the pathtrace tracer rendering straight to a
+;; <canvas> via the let-go `surface` host capability (let-go #255, Graphics Model B),
+;; instead of encoding a PNG and shipping it through the terminal as an iTerm2
+;; inline image. The guest writes an RGBA framebuffer; (surface/present rgba w h)
+;; hands it to the host, which putImageDatas it. No PNG encode, no base64, no IIP —
+;; the ~640ms/frame transport tax the IIP demo pays just disappears.
+;;
+;; Status text goes out-of-band via (js/emit :status {...}) to a <div>, and input
+;; (hjkl/n/r/q) arrives through the normal read-key ring (the shell's keydown ->
+;; LetGoHost.sendInput). Needs an lg whose runtime has the surface seam; falls back
+;; to a notice if the host wired no canvas.
+
+(ns ptcanvas
+  (:require [term]
+            [math]))
+
+;; ===== vec3 (same as the pathtrace demo) =====
+(defn v+ [a b] [(+ (nth a 0)(nth b 0)) (+ (nth a 1)(nth b 1)) (+ (nth a 2)(nth b 2))])
+(defn v- [a b] [(- (nth a 0)(nth b 0)) (- (nth a 1)(nth b 1)) (- (nth a 2)(nth b 2))])
+(defn vsc [a s] [(* (nth a 0) s) (* (nth a 1) s) (* (nth a 2) s)])
+(defn vmu [a b] [(* (nth a 0)(nth b 0)) (* (nth a 1)(nth b 1)) (* (nth a 2)(nth b 2))])
+(defn dot [a b] (+ (* (nth a 0)(nth b 0)) (* (nth a 1)(nth b 1)) (* (nth a 2)(nth b 2))))
+(defn norm [a] (vsc a (/ 1.0 (math/sqrt (dot a a)))))
+(defn cross [a b]
+  [(- (* (nth a 1)(nth b 2)) (* (nth a 2)(nth b 1)))
+   (- (* (nth a 2)(nth b 0)) (* (nth a 0)(nth b 2)))
+   (- (* (nth a 0)(nth b 1)) (* (nth a 1)(nth b 0)))])
+
+(def scenes
+  [[[0.0 -1000.0 0.0 1000.0  0.6 0.6 0.6   0 0 0]
+    [-1.1 0.5 0.0 0.5  0.9 0.25 0.25   0 0 0]
+    [0.0 0.5 0.0 0.5   0.25 0.9 0.3    0 0 0]
+    [1.1 0.5 0.0 0.5   0.3 0.45 0.9    0 0 0]
+    [0.0 2.6 1.2 0.7   0 0 0   6.0 5.5 5.0]]
+   [[0.0 -1000.0 0.0 1000.0  0.55 0.55 0.6   0 0 0]
+    [0.0 0.8 0.0 0.8   0.85 0.7 0.3    0 0 0]
+    [-1.3 0.4 0.6 0.4  0.3 0.7 0.85    0 0 0]
+    [1.3 0.4 0.6 0.4   0.8 0.3 0.7     0 0 0]
+    [-1.8 2.4 1.5 0.6  0 0 0   7.0 5.0 3.5]]])
+
+(defn s-c [s] [(nth s 0)(nth s 1)(nth s 2)])
+(defn s-r [s] (nth s 3))
+(defn s-alb [s] [(nth s 4)(nth s 5)(nth s 6)])
+(defn s-emit [s] [(nth s 7)(nth s 8)(nth s 9)])
+(defn emissive? [s] (> (+ (nth s 7)(nth s 8)(nth s 9)) 0.0))
+
+(defn hit-sphere [ro rd s]
+  (let [oc (v- ro (s-c s)) b (dot oc rd) c (- (dot oc oc) (* (s-r s)(s-r s))) disc (- (* b b) c)]
+    (if (< disc 0.0) nil
+      (let [sq (math/sqrt disc) t1 (- (- b) sq)]
+        (if (> t1 0.001) t1 (let [t2 (+ (- b) sq)] (if (> t2 0.001) t2 nil)))))))
+
+(defn nearest [sc ro rd]
+  (loop [i 0 best 1.0e30 bs nil]
+    (if (>= i (count sc)) (if bs [best bs] nil)
+      (let [t (hit-sphere ro rd (nth sc i))]
+        (if (and t (< t best)) (recur (inc i) t (nth sc i)) (recur (inc i) best bs))))))
+
+(defn sky [rd]
+  (let [t (* 0.5 (+ 1.0 (nth rd 1)))]
+    (v+ (vsc [1.0 1.0 1.0] (* 0.55 (- 1.0 t))) (vsc [0.5 0.7 1.0] (* 0.85 t)))))
+
+(def max-depth 5)
+
+(defn cosine-dir [n]
+  (let [r1 (* 6.2831853 (rand)) r2 (rand) r2s (math/sqrt r2)
+        a (if (> (math/abs (nth n 0)) 0.9) [0.0 1.0 0.0] [1.0 0.0 0.0])
+        u (norm (cross a n)) v (cross n u)]
+    (norm (v+ (v+ (vsc u (* (math/cos r1) r2s)) (vsc v (* (math/sin r1) r2s)))
+              (vsc n (math/sqrt (- 1.0 r2)))))))
+
+(defn radiance [sc ro rd depth]
+  (if (>= depth max-depth) [0.0 0.0 0.0]
+    (let [h (nearest sc ro rd)]
+      (if (nil? h) (sky rd)
+        (let [t (nth h 0) s (nth h 1) p (v+ ro (vsc rd t)) n (norm (v- p (s-c s)))]
+          (if (emissive? s) (s-emit s)
+            (v+ (s-emit s) (vmu (s-alb s) (radiance sc p (cosine-dir n) (inc depth))))))))))
+
+;; ===== camera + render =====
+(def W 160) (def H 120)
+(def look [0.0 0.7 0.0])
+(def RAD 5.2)
+(def home-th 0.0) (def home-hy 1.2)
+(defn cam-pos [th hy]
+  (v+ look [(* RAD (math/sin th)) (- hy (nth look 1)) (* RAD (math/cos th))]))
+(defn make-ray [cp px py]
+  (let [fwd (norm (v- look cp)) right (norm (cross fwd [0.0 1.0 0.0])) up (cross right fwd)
+        aspect (/ (float W) (float H)) fov 0.55
+        sx (* (- (* 2.0 (/ (+ px (rand)) (float W))) 1.0) aspect fov)
+        sy (* (- 1.0 (* 2.0 (/ (+ py (rand)) (float H)))) fov)]
+    (norm (v+ (v+ fwd (vsc right sx)) (vsc up sy)))))
+(defn render-pass [sc cp accum]
+  (loop [y 0]
+    (when (< y H)
+      (loop [x 0]
+        (when (< x W)
+          (let [c (radiance sc cp (make-ray cp x y) 0) idx (* 3 (+ (* y W) x))]
+            (aset accum idx (+ (aget accum idx) (nth c 0)))
+            (aset accum (+ idx 1) (+ (aget accum (+ idx 1)) (nth c 1)))
+            (aset accum (+ idx 2) (+ (aget accum (+ idx 2)) (nth c 2))))
+          (recur (inc x))))
+      (recur (inc y)))))
+
+(defn clampi [v] (max 0 (min 255 (int v))))
+
+;; Average + Reinhard + gamma straight into an RGBA byte-array (alpha = 255), the
+;; layout <canvas> ImageData wants. This is what (surface/present ...) blits — no
+;; PNG, no base64.
+(defn tonemap-rgba [accum spp]
+  (let [fb (make-array :byte (* W H 4)) inv (/ 1.0 (float spp)) npx (* W H)]
+    (loop [i 0]
+      (when (< i npx)
+        (let [a (* 3 i) o (* 4 i)
+              tone (fn [c] (let [v (* c inv)] (clampi (* 255.0 (math/pow (/ v (+ 1.0 v)) (/ 1.0 2.2))))))]
+          (aset fb o (tone (aget accum a)))
+          (aset fb (+ o 1) (tone (aget accum (+ a 1))))
+          (aset fb (+ o 2) (tone (aget accum (+ a 2))))
+          (aset fb (+ o 3) 255))
+        (recur (inc i))))
+    fb))
+
+;; ===== loop =====
+(def up (str (char 27) "[A")) (def down (str (char 27) "[B"))
+(def right (str (char 27) "[C")) (def left-key (str (char 27) "[D"))
+(def max-spp 256)
+
+(defn present-frame [scene-idx accum spp compute-ms]
+  (let [t0 (inst-ms (now))
+        fb (tonemap-rgba accum spp)
+        tone-ms (- (inst-ms (now)) t0)]
+    (surface/present fb W H)
+    (js/emit :status {:scene scene-idx :spp spp :w W :h H
+                      :compute compute-ms :present tone-ms})))
+
+(defn run []
+  (loop [scene-idx 0
+         sc (nth scenes 0)
+         th home-th hy home-hy
+         accum (make-array :double (* W H 3))
+         spp 0]
+    (let [cp (cam-pos th hy)
+          refine? (< spp max-spp)
+          t0 (inst-ms (now))
+          _ (when refine? (render-pass sc cp accum))
+          spp' (if refine? (inc spp) spp)
+          compute-ms (- (inst-ms (now)) t0)]
+      (when refine? (present-frame scene-idx accum spp' compute-ms))
+      (if (and refine? (not (term/key-pending?)))
+        (recur scene-idx sc th hy accum spp')
+        (let [k (term/read-key)
+              fresh (fn [] (make-array :double (* W H 3)))]
+          (cond
+            (nil? k) nil
+            (= k "q") nil
+            (= k "r") (recur scene-idx sc home-th home-hy (fresh) 0)
+            (= k "n") (let [ni (mod (inc scene-idx) (count scenes))]
+                        (recur ni (nth scenes ni) home-th home-hy (fresh) 0))
+            (or (= k "h") (= k left-key)) (recur scene-idx sc (- th 0.15) hy (fresh) 0)
+            (or (= k "l") (= k right))    (recur scene-idx sc (+ th 0.15) hy (fresh) 0)
+            (or (= k "k") (= k up))       (recur scene-idx sc th (min 4.0 (+ hy 0.25)) (fresh) 0)
+            (or (= k "j") (= k down))     (recur scene-idx sc th (max 0.3 (- hy 0.25)) (fresh) 0)
+            :else (recur scene-idx sc th hy accum spp')))))))
+
+(defn -main []
+  (set-rand-seed! 1)
+  (if (surface/available?)
+    (run)
+    ;; No host canvas wired (native, or a shell without onSurface): say so rather
+    ;; than silently dropping frames. The IIP demo (demos/pathtrace) is the path
+    ;; for terminals.
+    (println "ptcanvas: no host surface — run via the canvas shell (just serve ptcanvas)")))
+
+(when-not *compiling-aot*
+  (-main))
