@@ -9,6 +9,10 @@ identical output.
 It's a worked example of the AOT-native path — what works today, and where it's
 still hand-wired (see nooga/let-go#425).
 
+![mandelbrot-aot: the AOT-lowered kernel zooming at ~30fps; the status line shows ~2–5ms compute/frame](../../docs/img/mandelbrot-aot-zoom.gif)
+
+*The AOT-lowered `escape` running a live zoom — `compute` per frame is a few ms; the same workload on the bytecode VM is ~48ms/frame (`zoom-vm.lg`).*
+
 ## What it shows
 
 - **`kernel.lg`** — the escape-time kernel with `^double` param hints
