@@ -149,7 +149,7 @@ func main() {
 		out.Flush()
 		// Summary to stderr: always visible in a terminal, never pollutes a piped
 		// stdout (frame capture, metrics CSV, etc.).
-		fmt.Fprintf(os.Stderr, "── %d frames in %.2fs = %.1f fps (wall, delay=%dms) │ kernel: %.0f fps possible (%.2f ms/frame compute)\n",
+		fmt.Fprintf(os.Stderr, "── %d frames in %.2fs = %.0f fps wall (delay=%dms) │ kernel ceiling %.0f fps (%.1f ms/frame)\n",
 			frames, wall, float64(frames)/wall, delayMs,
 			1000.0*float64(frames)/totalComputeMs, totalComputeMs/float64(frames))
 

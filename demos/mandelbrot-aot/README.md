@@ -9,9 +9,9 @@ identical output.
 It's a worked example of the AOT-native path — what works today, and where it's
 still hand-wired (see nooga/let-go#425).
 
-![mandelbrot-aot: the AOT-lowered kernel zooming at ~30fps; the status line shows ~2–5ms compute/frame](../../docs/img/mandelbrot-aot-zoom.gif)
+![mandelbrot-aot: the AOT-lowered kernel diving uncapped (delay=0), ending on the frames/sec summary](../../docs/img/mandelbrot-aot-zoom.gif)
 
-*The AOT-lowered `escape` running a live zoom — `compute` per frame is a few ms; the same workload on the bytecode VM is ~48ms/frame (`zoom-vm.lg`).*
+*Uncapped (`zoom … 0`): the AOT-lowered `escape` runs as fast as the terminal will take it — ~2ms compute/frame. The on-screen fps is bounded by this headless capture's terminal; on a real terminal the same run clears ~470 fps. The bytecode VM does the identical kernel at ~48ms/frame (`zoom-vm.lg`).*
 
 ## What it shows
 
