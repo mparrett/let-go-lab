@@ -1,0 +1,48 @@
+;; Same animated zoom as mandel-native, but escape + render run on the VM
+;; (interpreted) — the "without AOT" comparison. Same kernel, same view.
+(ns mandel.vm (:require [string]))
+(def ESC (str (char 27)))
+(def ramp " .,:;irsXA253hMHGS#9B&@")
+(def W 100) (def H 44)
+
+(defn escape [cx cy mi]
+  (loop [zx 0.0 zy 0.0 i 0]
+    (let [zx2 (* zx zx) zy2 (* zy zy)]
+      (if (or (>= i mi) (> (+ zx2 zy2) 4.0)) i
+        (recur (+ (- zx2 zy2) cx) (+ (* 2.0 (* zx zy)) cy) (inc i))))))
+
+(defn cell [it mi]
+  (if (>= it mi)
+    (str ESC "[38;2;10;10;20m ")
+    (let [t  (/ (float it) (float mi))
+          r  (int (+ 9.0 (* 246.0 t)))
+          g  (int (+ 20.0 (* 120.0 t t)))
+          b  (int (+ 120.0 (* 135.0 (- 1.0 t))))
+          ch (nth ramp (int (* t (float (dec (count ramp))))))]
+      (str ESC "[38;2;" r ";" g ";" b "m" ch))))
+
+(defn render [cx0 cy0 span mi]
+  (let [spanY (/ (/ (* span (float H)) (float W)) 0.5)]
+    (apply str
+      (map (fn [row]
+        (let [cy (+ (- cy0 (/ spanY 2.0)) (* spanY (/ (float row) (float H))))]
+          (str
+            (apply str
+              (map (fn [col]
+                (let [cx (+ (- cx0 (/ span 2.0)) (* span (/ (float col) (float W))))]
+                  (cell (escape cx cy mi) mi)))
+                (range W)))
+            ESC "[0m\n")))
+        (range H)))))
+
+(def FRAMES 60)
+(println (str ESC "[2J" ESC "[?25l"))
+(loop [f 0 span 3.2]
+  (when (< f FRAMES)
+    (let [t0    (inst-ms (now))
+          mi    (+ 200 (* f 3))
+          frame (render -0.743643887037151 0.131825904205330 span mi)
+          ms    (- (inst-ms (now)) t0)]
+      (print (str ESC "[H" frame ESC "[0m VM (interpreted)  frame " (inc f) "  compute=" ms "ms   \n"))
+      (recur (inc f) (* span 0.965)))))
+(println (str ESC "[?25h" ESC "[0m"))

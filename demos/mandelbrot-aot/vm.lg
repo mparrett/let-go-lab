@@ -1,0 +1,21 @@
+(ns aot.vm)
+(defn escape [^double cx ^double cy mi]
+  (loop [zx 0.0 zy 0.0 i 0]
+    (let [zx2 (* zx zx) zy2 (* zy zy)]
+      (if (or (>= i mi) (> (+ zx2 zy2) 4.0)) i
+        (recur (+ (- zx2 zy2) cx) (+ (* 2.0 (* zx zy)) cy) (inc i))))))
+(defn cx-of [col] (+ -2.5 (* 0.03125 col)))
+(defn cy-of [row] (+ -1.5 (* 0.03125 row)))
+(def W 160) (def H 120) (def MI 256)
+(def REPS 20)
+(loop [r 0 sum 0]
+  (if (< r REPS)
+    (recur (inc r)
+      (loop [row 0 s 0]
+        (if (< row H)
+          (recur (inc row)
+            (let [cy (cy-of row)]
+              (loop [col 0 ss s]
+                (if (< col W) (recur (inc col) (+ ss (escape (cx-of col) cy MI))) ss))))
+          s)))
+    (println (str "vm      reps=" REPS "  checksum=" sum))))

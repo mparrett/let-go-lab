@@ -1,0 +1,9 @@
+(ns aot.kernel)
+(defn escape [^double cx ^double cy mi]
+  (loop [zx 0.0 zy 0.0 i 0]
+    (let [zx2 (* zx zx) zy2 (* zy zy)]
+      (if (or (>= i mi) (> (+ zx2 zy2) 4.0))
+        i
+        (recur (+ (- zx2 zy2) cx) (+ (* 2.0 (* zx zy)) cy) (inc i))))))
+(defn cx-of [col] (+ -2.5 (* 0.03125 col)))   ; #534: int col × float step
+(defn cy-of [row] (+ -1.5 (* 0.03125 row)))
