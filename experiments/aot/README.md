@@ -13,7 +13,8 @@ measurement harness.
 
 ## Result
 
-Same workload (160×120 grid, maxiter 96, the demo's home view), three ways:
+Same workload (160×120 grid, maxiter 96, the demo's home view), three ways (the
+original v1.11.0 run; re-validated on tip within noise — see Caveats):
 
 | Phase | Interpreted (VM) | Native Go | Speedup | Lowers under `lg-compile`? |
 |---|---|---|---|---|
