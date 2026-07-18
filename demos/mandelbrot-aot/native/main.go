@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -96,19 +97,32 @@ func readKey(r *bufio.Reader) (string, error) {
 	case 3: // Ctrl-C
 		return "q", nil
 	case 0x1b: // ESC — an arrow sequence if the rest already arrived, else a no-op
+		// Only consume bytes already buffered, so a lone ESC never blocks (arrow
+		// keys arrive as one ESC-[-x burst). Drain the whole CSI to its final byte
+		// (0x40..0x7e) so an unrecognized sequence — modified arrows, Home/PgUp —
+		// leaves no tail to be misread as later keystrokes; only a bare ESC-[-x
+		// maps to an arrow.
 		if r.Buffered() >= 2 {
-			b2, _ := r.ReadByte()
-			b3, _ := r.ReadByte()
-			if b2 == '[' {
-				switch b3 {
-				case 'A':
-					return "up", nil
-				case 'B':
-					return "down", nil
-				case 'C':
-					return "right", nil
-				case 'D':
-					return "left", nil
+			if b2, _ := r.ReadByte(); b2 == '[' {
+				var seq []byte
+				for r.Buffered() > 0 {
+					c, _ := r.ReadByte()
+					seq = append(seq, c)
+					if c >= 0x40 && c <= 0x7e { // CSI final byte
+						break
+					}
+				}
+				if len(seq) == 1 {
+					switch seq[0] {
+					case 'A':
+						return "up", nil
+					case 'B':
+						return "down", nil
+					case 'C':
+						return "right", nil
+					case 'D':
+						return "left", nil
+					}
 				}
 			}
 		}
@@ -134,16 +148,16 @@ func runInteractive(out *bufio.Writer) {
 		os.Exit(1)
 	}
 	// One teardown path for every exit (return, EOF, signal): restore cooked
-	// mode, leave the alt screen, show the cursor, reset SGR. Guarded so the
-	// signal handler and the deferred call don't double-run it.
-	var restored bool
+	// mode, leave the alt screen, show the cursor, reset SGR. sync.Once so the
+	// deferred call and the signal goroutine can both invoke it without racing
+	// (and it runs exactly once). It writes to os.Stdout, not the buffered `out`,
+	// so a signal mid-frame can't corrupt the writer's shared buffer.
+	var once sync.Once
 	restore := func() {
-		if restored {
-			return
-		}
-		restored = true
-		term.Restore(fd, old)
-		os.Stdout.WriteString("\x1b[?2026l\x1b[?25h\x1b[0m\x1b[?1049l")
+		once.Do(func() {
+			term.Restore(fd, old)
+			os.Stdout.WriteString("\x1b[?2026l\x1b[?25h\x1b[0m\x1b[?1049l")
+		})
 	}
 	defer restore()
 	// Raw mode disables ISIG, so Ctrl-C arrives as a byte (handled in readKey);
