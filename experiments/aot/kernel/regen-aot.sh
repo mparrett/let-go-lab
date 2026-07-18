@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# regen-aot.sh — reproduce the AOT-lowered compute number (~56x vs interpreted).
+# regen-aot.sh — reproduce the AOT-lowered compute number (~70x vs interpreted).
 #
 # Lowers mandel_kernel.lg to Go with lg-compile, drops aot_bench_test.go into the
 # generated package, and benches it. The generated Go imports the let-go runtime,
 # so it must build inside the let-go module — hence the scratch package below.
 #
-# Needs a let-go >= 1.11.0 checkout with a built ./lg. Resolution order:
+# Needs a let-go >= 1.12 checkout with a built ./lg (the bench template calls the
+# exported `MandelBench`; lg-compile switched to exported CamelCase names after
+# 1.11.0). Resolution order:
 #   ./regen-aot.sh /path/to/let-go   |   LETGO=/path/to/let-go ./regen-aot.sh
 #   (default: the repo's ./let-go symlink)
 set -euo pipefail

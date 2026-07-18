@@ -8,8 +8,11 @@
 ;; Everything float is a local from float literals; everything int is an int
 ;; counter. Returns the total iteration count over the grid.
 ;;
-;; Shaped this way to dodge the two AOT gaps (see ../README.md): float params
-;; typed as int (let-go#357) and int->float casts forcing trampolines.
+;; Shaped this way to keep it a params-free micro-bench: everything float is a
+;; local from float literals, so it lowers on any let-go >= 1.11.0. The float-param
+;; gap this originally dodged (let-go#357) is now fixed upstream, so the natural
+;; `(defn escape [^double cx ^double cy mi] ...)` also lowers -- see the hinted
+;; kernel in ../../../demos/mandelbrot-aot/kernel.lg.
 (defn mandel-bench [maxiter]
   (loop [j 0 im -1.2 sum 0]
     (if (>= j 120)
