@@ -10,6 +10,10 @@
 # throwaway scratch (probes, screenshots, one-offs)
 /scratch/
 
+# pathtrace headless-bench artifact (written to cwd by `lg pathtrace.lg </dev/null`)
+/out.png
+/out.png.b64
+
 # local lg checkout symlink — machine-specific (create your own, or set LETGO);
 # kept out of the tree so it neither breaks on clone nor leaks a local layout
 /let-go

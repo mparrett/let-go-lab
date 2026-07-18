@@ -1,0 +1,431 @@
+;; pathtrace.lg — standalone let-go WASM demo: a small progressive Monte Carlo
+;; path tracer. Unlike the mandelbrot demo (sixel), this encodes its own PNG and
+;; displays it inline via the iTerm2 inline-image protocol (OSC 1337), which the
+;; browser shell's @xterm/addon-image decodes (kitty is NOT decoded by that
+;; addon; iTerm2 IIP is, by default). The same escape shows the image in iTerm2
+;; natively. base64 is the transport, which matters: a let-go String is UTF-8, so
+;; bytes >127 cannot be placed into one without corruption — base64 keeps every
+;; emitted byte in 0..127. Native non-iTerm / headless runs decode the same base64
+;; to a real out.png via `openssl` (a raw byte file likewise can't be built as a
+;; String, so we hand the bytes to a decoder).
+;;
+;; Pipeline per frame: trace +1 sample/pixel into a float accumulation buffer ->
+;; tone-map the running average to 8-bit RGB -> encode-png -> base64 -> iTerm2
+;; IIP escape -> term/write. Convergence is the show: each pass lowers the noise.
+
+(ns pathtrace
+  (:require [term]
+            [math]))
+
+(def ESC (str (char 27)))
+
+;; ===========================================================================
+;; PNG encoder — produces a vector of bytes (ints 0..255). zlib uses *stored*
+;; (uncompressed) DEFLATE blocks: no compression algorithm, just framing + the
+;; two checksums PNG/zlib require (CRC32 per chunk, Adler32 over the raw data).
+;; Built with transients throughout so assembling a ~58 KB frame stays linear.
+;; ===========================================================================
+
+(defn u32be [n]
+  [(bit-and (bit-shift-right n 24) 255) (bit-and (bit-shift-right n 16) 255)
+   (bit-and (bit-shift-right n 8) 255) (bit-and n 255)])
+(defn u16le [n] [(bit-and n 255) (bit-and (bit-shift-right n 8) 255)])
+(defn into! [t xs] (reduce conj! t xs))
+
+;; CRC32, reflected, polynomial 0xEDB88320 — table built once at load.
+(def crc-table
+  (mapv (fn [n]
+          (loop [c n k 0]
+            (if (>= k 8) c
+              (recur (if (= 1 (bit-and c 1))
+                       (bit-xor 0xEDB88320 (bit-shift-right c 1))
+                       (bit-shift-right c 1))
+                     (inc k)))))
+        (range 256)))
+
+(defn crc32 [b]
+  (bit-xor (loop [c 0xFFFFFFFF i 0]
+             (if (>= i (count b)) c
+               (recur (bit-xor (bit-shift-right c 8)
+                               (nth crc-table (bit-and (bit-xor c (nth b i)) 255)))
+                      (inc i))))
+           0xFFFFFFFF))
+
+(defn adler32 [b]
+  (loop [a 1 s 0 i 0]
+    (if (>= i (count b)) (bit-or (bit-shift-left s 16) a)
+      (let [a2 (mod (+ a (nth b i)) 65521)]
+        (recur a2 (mod (+ s a2) 65521) (inc i))))))
+
+;; One PNG chunk: length(4 BE) + type(4 ASCII) + data + CRC32(type+data).
+(defn chunk-bytes [type-str data]
+  (let [td (persistent! (into! (into! (transient []) (mapv int type-str)) data))]
+    (persistent! (into! (into! (into! (transient []) (u32be (count data))) td)
+                        (u32be (crc32 td))))))
+
+;; zlib stream = header + stored DEFLATE blocks (each <=65535 bytes) + Adler32.
+;; Each stored block: BFINAL flag byte, LEN(2 LE), one's-complement LEN(2 LE),
+;; then LEN literal bytes.
+(defn zlib-stored [raw]
+  (let [n (count raw)]
+    (loop [off 0 acc (transient [0x78 0x01])]
+      (if (>= off n)
+        (persistent! (into! acc (u32be (adler32 raw))))
+        (let [len (min 65535 (- n off))
+              fin (if (>= (+ off len) n) 1 0)             ; BFINAL on the last block
+              acc (into! acc [fin])
+              acc (into! acc (u16le len))
+              acc (into! acc (u16le (bit-and (bit-not len) 0xFFFF)))   ; one's-complement LEN
+              acc (loop [i 0 a acc]
+                    (if (>= i len) a (recur (inc i) (conj! a (nth raw (+ off i))))))]
+          (recur (+ off len) acc))))))
+
+;; Raw scanlines: each row is a filter byte (0 = None) followed by its RGB bytes.
+(defn raw-scanlines [w h fb]
+  (let [stride (* w 3)]
+    (loop [y 0 acc (transient [])]
+      (if (>= y h) (persistent! acc)
+        (let [base (* y stride)
+              acc (conj! acc 0)
+              acc (loop [x 0 a acc]
+                    (if (>= x stride) a (recur (inc x) (conj! a (aget fb (+ base x))))))]
+          (recur (inc y) acc))))))
+
+(defn encode-png [w h fb]
+  (let [ihdr (persistent! (into! (into! (into! (transient []) (u32be w)) (u32be h))
+                                 [8 2 0 0 0]))           ; depth 8, colortype 2 (RGB)
+        idat (zlib-stored (raw-scanlines w h fb))]
+    (persistent! (into! (into! (into! (transient [137 80 78 71 13 10 26 10])
+                                      (chunk-bytes "IHDR" ihdr))
+                               (chunk-bytes "IDAT" idat))
+                        (chunk-bytes "IEND" [])))))
+
+;; base64 over a byte vector -> ASCII string. base64-slow is the pure-let-go
+;; encoder; `base64` below prefers a native builtin when the runtime has one.
+(def b64-alpha
+  (mapv int "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"))
+(defn base64-slow [b]
+  (let [n (count b)]
+    (loop [i 0 acc (transient [])]
+      (if (>= i n) (apply str (map char (persistent! acc)))
+        (let [b0 (nth b i)
+              b1 (if (< (+ i 1) n) (nth b (+ i 1)) 0)
+              b2 (if (< (+ i 2) n) (nth b (+ i 2)) 0)
+              tr (bit-or (bit-or (bit-shift-left b0 16) (bit-shift-left b1 8)) b2)]
+          (recur (+ i 3)
+                 (-> acc
+                     (conj! (nth b64-alpha (bit-and (bit-shift-right tr 18) 63)))
+                     (conj! (nth b64-alpha (bit-and (bit-shift-right tr 12) 63)))
+                     (conj! (if (< (+ i 1) n) (nth b64-alpha (bit-and (bit-shift-right tr 6) 63)) 61))
+                     (conj! (if (< (+ i 2) n) (nth b64-alpha (bit-and tr 63)) 61)))))))))
+
+;; Prefer the native base64-encode builtin when present (let-go past the v1.11.0
+;; floor); `resolve` returns nil on older lg, so this degrades to the let-go encoder
+;; with no load-time dependency on the symbol. The PNG bytes are a vector of ints;
+;; the native fn takes a byte-array. In-browser wasm this is the slow part of the
+;; per-frame encode, so the native path is a real win there.
+(def native-base64 (resolve 'base64-encode))
+(defn base64 [b]
+  (if native-base64 (native-base64 (byte-array b)) (base64-slow b)))
+
+;; ===========================================================================
+;; vec3 — plain 3-element vectors. Hot path; kept allocation-lean.
+;; ===========================================================================
+(defn v+ [a b] [(+ (nth a 0)(nth b 0)) (+ (nth a 1)(nth b 1)) (+ (nth a 2)(nth b 2))])
+(defn v- [a b] [(- (nth a 0)(nth b 0)) (- (nth a 1)(nth b 1)) (- (nth a 2)(nth b 2))])
+(defn vsc [a s] [(* (nth a 0) s) (* (nth a 1) s) (* (nth a 2) s)])
+(defn vmu [a b] [(* (nth a 0)(nth b 0)) (* (nth a 1)(nth b 1)) (* (nth a 2)(nth b 2))])
+(defn dot [a b] (+ (* (nth a 0)(nth b 0)) (* (nth a 1)(nth b 1)) (* (nth a 2)(nth b 2))))
+(defn norm [a] (vsc a (/ 1.0 (math/sqrt (dot a a)))))
+(defn cross [a b]
+  [(- (* (nth a 1)(nth b 2)) (* (nth a 2)(nth b 1)))
+   (- (* (nth a 2)(nth b 0)) (* (nth a 0)(nth b 2)))
+   (- (* (nth a 0)(nth b 1)) (* (nth a 1)(nth b 0)))])
+
+;; ===========================================================================
+;; Scene — a sphere is the flat vector [cx cy cz r ar ag ab er eg eb]: center,
+;; radius, diffuse albedo, emission. A nonzero emission makes it a light.
+;; ===========================================================================
+(def scenes
+  [;; scene 0: three diffuse spheres + an overhead light sphere
+   [[0.0 -1000.0 0.0 1000.0  0.6 0.6 0.6   0 0 0]
+    [-1.1 0.5 0.0 0.5  0.9 0.25 0.25   0 0 0]
+    [0.0 0.5 0.0 0.5   0.25 0.9 0.3    0 0 0]
+    [1.1 0.5 0.0 0.5   0.3 0.45 0.9    0 0 0]
+    [0.0 2.6 1.2 0.7   0 0 0   6.0 5.5 5.0]]
+   ;; scene 1: one big center sphere flanked by two, warmer light
+   [[0.0 -1000.0 0.0 1000.0  0.55 0.55 0.6   0 0 0]
+    [0.0 0.8 0.0 0.8   0.85 0.7 0.3    0 0 0]
+    [-1.3 0.4 0.6 0.4  0.3 0.7 0.85    0 0 0]
+    [1.3 0.4 0.6 0.4   0.8 0.3 0.7     0 0 0]
+    [-1.8 2.4 1.5 0.6  0 0 0   7.0 5.0 3.5]]])
+
+(defn s-c [s] [(nth s 0)(nth s 1)(nth s 2)])
+(defn s-r [s] (nth s 3))
+(defn s-alb [s] [(nth s 4)(nth s 5)(nth s 6)])
+(defn s-emit [s] [(nth s 7)(nth s 8)(nth s 9)])
+(defn emissive? [s] (> (+ (nth s 7)(nth s 8)(nth s 9)) 0.0))
+
+;; Ray-sphere: rd is unit length, so a=1 and we solve t^2 + 2b t + c = 0 with the
+;; half-b trick. Returns the nearest t past a small epsilon (self-shadow bias) or nil.
+(defn hit-sphere [ro rd s]
+  (let [oc (v- ro (s-c s))
+        b (dot oc rd)
+        c (- (dot oc oc) (* (s-r s)(s-r s)))
+        disc (- (* b b) c)]
+    (if (< disc 0.0) nil
+      (let [sq (math/sqrt disc) t1 (- (- b) sq)]
+        (if (> t1 0.001) t1
+          (let [t2 (+ (- b) sq)] (if (> t2 0.001) t2 nil)))))))
+
+(defn nearest [sc ro rd]
+  (loop [i 0 best 1.0e30 bs nil]
+    (if (>= i (count sc)) (if bs [best bs] nil)
+      (let [t (hit-sphere ro rd (nth sc i))]
+        (if (and t (< t best)) (recur (inc i) t (nth sc i))
+            (recur (inc i) best bs))))))
+
+;; Sky acts as a soft area light (a vertical gradient), so even pure path tracing
+;; with no explicit light sampling converges — every escaping ray collects energy.
+(defn sky [rd]
+  (let [t (* 0.5 (+ 1.0 (nth rd 1)))]
+    (v+ (vsc [1.0 1.0 1.0] (* 0.55 (- 1.0 t)))
+        (vsc [0.5 0.7 1.0] (* 0.85 t)))))
+
+(def max-depth 5)
+
+;; Cosine-weighted hemisphere sample about n. With this pdf the cos term and the
+;; pdf cancel, so the diffuse estimator is simply albedo (X) incoming radiance.
+(defn cosine-dir [n]
+  (let [r1 (* 6.2831853 (rand))
+        r2 (rand) r2s (math/sqrt r2)
+        a (if (> (math/abs (nth n 0)) 0.9) [0.0 1.0 0.0] [1.0 0.0 0.0])
+        u (norm (cross a n))
+        v (cross n u)]
+    (norm (v+ (v+ (vsc u (* (math/cos r1) r2s)) (vsc v (* (math/sin r1) r2s)))
+              (vsc n (math/sqrt (- 1.0 r2)))))))
+
+(defn radiance [sc ro rd depth]
+  (if (>= depth max-depth) [0.0 0.0 0.0]
+    (let [h (nearest sc ro rd)]
+      (if (nil? h) (sky rd)
+        (let [t (nth h 0) s (nth h 1)
+              p (v+ ro (vsc rd t))
+              n (norm (v- p (s-c s)))]
+          (if (emissive? s) (s-emit s)
+            (v+ (s-emit s)
+                (vmu (s-alb s) (radiance sc p (cosine-dir n) (inc depth))))))))))
+
+;; ===========================================================================
+;; Camera + render. The camera orbits a look-at point on a circle of radius RAD
+;; at height HY, by angle th — h/l spin it, j/k raise/lower it.
+;; ===========================================================================
+(def W 160) (def H 120)               ; render resolution (cost ~ W*H per pass)
+(def DISP 2)                          ; on-screen scale: image shown at W*DISP x H*DISP px
+(def look [0.0 0.7 0.0])
+(def RAD 5.2)
+(def home-th 0.0) (def home-hy 1.2)
+
+(defn cam-pos [th hy]
+  (v+ look [(* RAD (math/sin th)) (- hy (nth look 1)) (* RAD (math/cos th))]))
+
+(defn make-ray [cp px py]
+  (let [fwd (norm (v- look cp))
+        right (norm (cross fwd [0.0 1.0 0.0]))
+        up (cross right fwd)
+        aspect (/ (float W) (float H))
+        fov 0.55
+        sx (* (- (* 2.0 (/ (+ px (rand)) (float W))) 1.0) aspect fov)
+        sy (* (- 1.0 (* 2.0 (/ (+ py (rand)) (float H)))) fov)]
+    (norm (v+ (v+ fwd (vsc right sx)) (vsc up sy)))))
+
+;; One progressive pass: +1 jittered sample/pixel into the float accum buffer.
+(defn render-pass [sc cp accum]
+  (loop [y 0]
+    (when (< y H)
+      (loop [x 0]
+        (when (< x W)
+          (let [c (radiance sc cp (make-ray cp x y) 0)
+                idx (* 3 (+ (* y W) x))]
+            (aset accum idx (+ (aget accum idx) (nth c 0)))
+            (aset accum (+ idx 1) (+ (aget accum (+ idx 1)) (nth c 1)))
+            (aset accum (+ idx 2) (+ (aget accum (+ idx 2)) (nth c 2))))
+          (recur (inc x))))
+      (recur (inc y)))))
+
+(defn clampi [v] (max 0 (min 255 (int v))))
+
+;; Average the accumulation, Reinhard tone-map, gamma 2.2, quantize to 8-bit.
+(defn tonemap [accum spp]
+  (let [fb (make-array :byte (* W H 3)) inv (/ 1.0 (float spp))]
+    (loop [i 0]
+      (when (< i (* W H 3))
+        (let [v (* (aget accum i) inv)
+              m (/ v (+ 1.0 v))
+              g (math/pow m (/ 1.0 2.2))]
+          (aset fb i (clampi (* 255.0 g))))
+        (recur (inc i))))
+    fb))
+
+;; ===========================================================================
+;; Display + disk output
+;; ===========================================================================
+;; iTerm2 inline-image escape carrying a base64 PNG, shown at DISP scale. Decoded
+;; by @xterm/addon-image (browser) and iTerm2 (native); other terminals ignore the
+;; unknown OSC. size = decoded byte count (the addon uses it as a sanity bound).
+(defn iip-escape [png-bytes b64]
+  (str ESC "]1337;File=inline=1;size=" (count png-bytes)
+       ";width=" (* W DISP) "px;height=" (* H DISP) "px;preserveAspectRatio=1:"
+       b64 (char 7)))
+
+;; Native/headless artifact: write a real out.png. Fast path: spit the bytes
+;; directly — works where `spit` accepts a byte-array (let-go past the v1.11.0
+;; floor; see the byte-output change). Fallback for older runtimes, where a String
+;; is UTF-8 and can't carry bytes >127: base64 it and let `openssl` decode to disk.
+;; Returns true on success.
+(defn write-png-file [path png-bytes b64]
+  (if (try (do (spit path (byte-array png-bytes)) true) (catch e false))
+    true
+    (let [tmp (str path ".b64")]
+      (spit tmp b64)
+      (let [r (os/sh "openssl" "base64" "-d" "-A" "-in" tmp "-out" path)]
+        (try (os/sh "rm" "-f" tmp) (catch e nil))
+        (= (:exit r) 0)))))
+
+;; ===========================================================================
+;; Interaction (mirrors mandelbrot's setup!/teardown!/loop-keys shape)
+;; ===========================================================================
+(def COL0 2)
+(def IMG-ROW0 6)
+(def CHROME-ROWS 8)
+
+(defn announce-geometry []
+  ;; Tell the shell the on-screen image size (px) + chrome rows so it content-sizes
+  ;; the terminal. Native terminals ignore the unknown OSC.
+  (term/write (str ESC "]5002;" (* W DISP) ";" (* H DISP) ";" CHROME-ROWS ";" COL0 (char 7)))
+  (term/flush))
+
+(defn setup! []
+  (term/raw-mode!)
+  (term/alternate-screen)
+  (term/hide-cursor)
+  (term/clear))
+
+(defn teardown! []
+  (term/show-cursor)
+  (term/reset-style)
+  (term/main-screen)
+  (term/flush)
+  (term/restore-mode!))
+
+(def CLEAR-EOL (str ESC "[K"))
+
+(defn status [scene spp]
+  (term/move-cursor COL0 2)
+  (term/write (str "pathtrace · let-go · PNG/iTerm-IIP" CLEAR-EOL))
+  (term/move-cursor COL0 3)
+  (term/write (str "scene " scene " · " spp " spp · " W "×" H CLEAR-EOL))
+  (term/move-cursor COL0 4)
+  (term/write (str "hjkl·orbit n·scene r·reset q·quit" CLEAR-EOL)))
+
+;; Render the current accumulation to an inline image at (COL0, IMG-ROW0), with a
+;; bottom timing bar written relative to where the image left the cursor.
+(defn show [scene-idx sc cp accum spp compute-ms]
+  (let [t0 (inst-ms (now))
+        fb (tonemap accum spp)
+        png (encode-png W H fb)
+        b64 (base64 png)
+        encode-ms (- (inst-ms (now)) t0)]
+    (status scene-idx spp)
+    (term/move-cursor COL0 IMG-ROW0)
+    (term/write (iip-escape png b64))
+    (term/write (str ESC "[J"))                ; clear any stale rows below
+    (term/write (str "\r\n " "compute " compute-ms "ms · encode " encode-ms "ms /pass" CLEAR-EOL))
+    (term/flush)))
+
+;; Arrow keys (CSI) as orbit aliases for hjkl.
+(def up (str ESC "[A")) (def down (str ESC "[B"))
+(def right (str ESC "[C")) (def left-key (str ESC "[D"))
+
+;; Stop accumulating once the image is essentially converged, so an idle demo
+;; doesn't peg a core forever — past this we just block on input. A reset/orbit/
+;; scene change re-seeds the buffer and refining resumes.
+(def max-spp 256)
+
+;; A loop step: render ONE pass (until converged), display, then take input. While
+;; refining we poll so passes accumulate during idle time; once capped we block on
+;; read-key. Each orbit/scene/reset key re-seeds the accumulation buffer.
+(defn loop-keys [init-scene]
+  (loop [scene-idx init-scene
+         sc (nth scenes init-scene)
+         th home-th hy home-hy
+         accum (make-array :double (* W H 3))
+         spp 0]
+    (let [cp (cam-pos th hy)
+          refine? (< spp max-spp)
+          t0 (inst-ms (now))
+          _ (when refine? (render-pass sc cp accum))
+          spp' (if refine? (inc spp) spp)
+          compute-ms (- (inst-ms (now)) t0)]
+      (when refine? (show scene-idx sc cp accum spp' compute-ms))
+      ;; Refining + no key waiting → loop to add another pass. Otherwise (a key is
+      ;; pending, or we're converged) read one key and act on it.
+      (if (and refine? (not (term/key-pending?)))
+        (recur scene-idx sc th hy accum spp')
+        (let [k (term/read-key)
+              fresh (fn [] (make-array :double (* W H 3)))]
+          (cond
+            (nil? k) nil
+            (= k "q") nil
+            (= k "r") (recur scene-idx sc home-th home-hy (fresh) 0)
+            (= k "n") (let [ni (mod (inc scene-idx) (count scenes))]
+                        (recur ni (nth scenes ni) home-th home-hy (fresh) 0))
+            (or (= k "h") (= k left-key)) (recur scene-idx sc (- th 0.15) hy (fresh) 0)
+            (or (= k "l") (= k right))    (recur scene-idx sc (+ th 0.15) hy (fresh) 0)
+            (or (= k "k") (= k up))       (recur scene-idx sc th (min 4.0 (+ hy 0.25)) (fresh) 0)
+            (or (= k "j") (= k down))     (recur scene-idx sc th (max 0.3 (- hy 0.25)) (fresh) 0)
+            :else (recur scene-idx sc th hy accum spp')))))))
+
+;; ===========================================================================
+;; Headless bench / native artifact: render BENCH-SPP passes of scene 0 from the
+;; home camera, print timing, and write out.png. Triggered by a non-TTY run:
+;;   lg demos/pathtrace/pathtrace.lg </dev/null
+;; ===========================================================================
+(def bench-spp 32)
+
+(defn run-bench []
+  (println (str "pathtrace bench — " bench-spp " spp, " W "×" H ", scene 0 (no TTY)"))
+  (let [sc (nth scenes 0)
+        cp (cam-pos home-th home-hy)
+        accum (make-array :double (* W H 3))
+        t0 (inst-ms (now))]
+    (loop [n 0]
+      (when (< n bench-spp)
+        (let [pt0 (inst-ms (now))]
+          (render-pass sc cp accum)
+          (println (str "pass " (inc n) "  " (- (inst-ms (now)) pt0) "ms")))
+        (recur (inc n))))
+    (let [compute-ms (- (inst-ms (now)) t0)
+          et0 (inst-ms (now))
+          fb (tonemap accum bench-spp)
+          png (encode-png W H fb)
+          b64 (base64 png)
+          encode-ms (- (inst-ms (now)) et0)
+          ok (write-png-file "out.png" png b64)]
+      (println (str "total compute " compute-ms "ms · encode " encode-ms "ms · png "
+                    (count png) " bytes"))
+      (println (if ok "wrote out.png" "out.png decode failed (is openssl on PATH?)")))))
+
+(defn -main []
+  (set-rand-seed! 1)
+  (if (nil? (term/size))
+    (run-bench)
+    (do
+      (setup!)
+      (try
+        (announce-geometry)
+        (loop-keys 0)
+        (finally (teardown!))))))
+
+(when-not *compiling-aot*
+  (-main))
