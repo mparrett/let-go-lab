@@ -23,8 +23,11 @@ still hand-wired (see nooga/let-go#425).
   `func Escape(ec *vm.ExecContext, cx float64, cy float64, mi int) int` — a raw
   `for` loop on unboxed `float64`, no VM dispatch, no boxing. `CxOf(col int)
   float64` widens the int column (nooga/let-go#534).
-- **`native/main.go`** — a thin Go `main` that calls the lowered funcs directly.
-  For a pure kernel the "driver" is trivial; no VM boot needed.
+- **`native/main.go`** — the Go driver that calls the lowered funcs directly (no
+  VM boot needed). It renders truecolor ANSI cells and runs a live, keyboard-driven
+  fractal (`interactive` mode) — the same home view and key bindings as the VM
+  [`mandelbrot`](../mandelbrot) demo, but on the native kernel, so panning and
+  zooming are instant (~1–3 ms/frame vs the VM's ~48 ms).
 - **`vm.lg` / `zoom-vm.lg`** — the same workload on the bytecode VM, for the
   side-by-side comparison.
 
@@ -35,10 +38,22 @@ Needs a **let-go ≥ 1.12** checkout (the `^double` AOT param hints, #357/#534).
 
 ```sh
 ./build.sh                      # or: LG=/path/to/let-go-1.12 ./build.sh
-./mandel-native zoom 240 0 0    # uncapped zoom (delay=0) — feel the speed
+./mandel-native interactive     # live, keyboard-driven fractal — pan/zoom it yourself
+./mandel-native zoom 240 0 0    # scripted uncapped zoom (delay=0) — feel the speed
 ./mandel-native ascii           # static plain-ASCII fractal
 ./mandel-native bench           # native-vs-VM timing (checksums must match)
 ```
+
+`interactive` (needs a real TTY) drives the native kernel live. Keys, matching the
+VM demo:
+
+| Key | Action |
+|---|---|
+| `+` / `-` | zoom in / out |
+| `h j k l` or arrows | pan left / down / up / right |
+| `,` / `.` | fewer / more iterations (detail vs speed) |
+| `r` | reset to the home view |
+| `q` or Ctrl-C | quit |
 
 `zoom` params: `zoom [frames] [startFrame] [delayMs] [stepPct]`. The status line
 prints `frame / span / mi / compute / delay`; an fps summary goes to stderr at

@@ -24,4 +24,4 @@ fi
 
 ( cd "$DEMO" && GOFLAGS=-mod=mod go build -ldflags '-s -w' -o mandel-native ./native )
 echo "built $DEMO/mandel-native"
-echo "try:  ./mandel-native zoom 240 0 0   |   ./mandel-native ascii   |   ./mandel-native bench"
+echo "try:  ./mandel-native interactive   |   ./mandel-native zoom 240 0 0   |   ./mandel-native bench"

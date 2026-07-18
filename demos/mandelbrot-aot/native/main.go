@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	k "mandelbrot-aot/gen/aot/kernel"
+
+	"golang.org/x/term"
 )
 
 const ramp = " .,:;irsXA253hMHGS#9B&@"
@@ -67,6 +71,145 @@ func render(W, H int, cx0, cy0, spanX float64, mi int) []byte {
 	return buf
 }
 
+// Interactive control model, ported from demos/mandelbrot/mandelbrot.lg (the VM
+// demo). Same home view and same key bindings, so the two feel identical — this
+// one just runs the lowered native Escape instead of the bytecode VM.
+const (
+	homeX, homeY, homeW = -0.6, 0.0, 3.2 // home view: center + span (view width)
+	homeMaxiter         = 96
+	zoomFactor          = 0.7 // +/- multiply/divide the span; 0.7 ≈ a 1.4× step
+	panFrac             = 0.2 // one pan step = 20% of the current span
+	miStep              = 16
+	miMin, miMax        = 16, 1024
+)
+
+// readKey decodes one keypress from a raw-mode stdin: a single byte, Ctrl-C, or
+// a 3-byte arrow escape sequence. It only consumes the trailing bytes of an
+// escape sequence when they're already buffered, so a lone ESC never blocks
+// waiting for more (arrow keys arrive as one ESC-[-A burst, so they are buffered).
+func readKey(r *bufio.Reader) (string, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return "", err
+	}
+	switch b {
+	case 3: // Ctrl-C
+		return "q", nil
+	case 0x1b: // ESC — an arrow sequence if the rest already arrived, else a no-op
+		if r.Buffered() >= 2 {
+			b2, _ := r.ReadByte()
+			b3, _ := r.ReadByte()
+			if b2 == '[' {
+				switch b3 {
+				case 'A':
+					return "up", nil
+				case 'B':
+					return "down", nil
+				case 'C':
+					return "right", nil
+				case 'D':
+					return "left", nil
+				}
+			}
+		}
+		return "", nil
+	default:
+		return string(b), nil
+	}
+}
+
+// runInteractive is the "grow the showcase into the full fractal" mode (#35): a
+// live keyboard-driven fractal at native speed. Rendering, sixel-free ANSI cells,
+// and DEC-2026 synchronized output are the same machinery the scripted `zoom`
+// mode already uses; the new part is the raw-mode read-key loop.
+func runInteractive(out *bufio.Writer) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		fmt.Fprintln(os.Stderr, "interactive mode needs a TTY on stdin (try a real terminal, not a pipe)")
+		os.Exit(1)
+	}
+	old, err := term.MakeRaw(fd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "interactive: cannot enter raw mode:", err)
+		os.Exit(1)
+	}
+	// One teardown path for every exit (return, EOF, signal): restore cooked
+	// mode, leave the alt screen, show the cursor, reset SGR. Guarded so the
+	// signal handler and the deferred call don't double-run it.
+	var restored bool
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		term.Restore(fd, old)
+		os.Stdout.WriteString("\x1b[?2026l\x1b[?25h\x1b[0m\x1b[?1049l")
+	}
+	defer restore()
+	// Raw mode disables ISIG, so Ctrl-C arrives as a byte (handled in readKey);
+	// this net catches a SIGTERM (or SIGINT that slips through) so the terminal
+	// is never left raw with the cursor hidden.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() { <-sigCh; restore(); os.Exit(130) }()
+
+	out.WriteString("\x1b[?1049h\x1b[?25l\x1b[2J") // alt screen, hide cursor, clear
+	out.Flush()
+
+	const W, H = 100, 44
+	cx, cy, vw, mi := homeX, homeY, homeW, homeMaxiter
+	r := bufio.NewReader(os.Stdin)
+	for {
+		t0 := time.Now()
+		frame := render(W, H, cx, cy, vw, mi)
+		ms := float64(time.Since(t0).Microseconds()) / 1000.0
+		// DEC 2026: present image + status atomically, no mid-draw tearing.
+		out.WriteString("\x1b[?2026h\x1b[H")
+		out.Write(frame)
+		out.WriteString("\x1b[0m x=")
+		out.WriteString(strconv.FormatFloat(cx, 'f', 5, 64))
+		out.WriteString(" y=")
+		out.WriteString(strconv.FormatFloat(cy, 'f', 5, 64))
+		out.WriteString(" zoom=")
+		out.WriteString(strconv.Itoa(int(homeW / vw)))
+		out.WriteString("×  maxiter=")
+		out.WriteString(strconv.Itoa(mi))
+		out.WriteString("  compute=")
+		out.WriteString(strconv.FormatFloat(ms, 'f', 1, 64))
+		out.WriteString("ms\x1b[K\n [+/-] zoom  [hjkl/arrows] pan  [,/.] detail  [r] reset  [q] quit\x1b[K")
+		out.WriteString("\x1b[?2026l")
+		out.Flush()
+
+		key, err := readKey(r)
+		if err != nil { // EOF on stdin
+			return
+		}
+		pan := vw * panFrac
+		switch key {
+		case "q":
+			return
+		case "+", "=":
+			vw *= zoomFactor
+		case "-", "_":
+			vw /= zoomFactor
+		case "h", "left":
+			cx -= pan
+		case "l", "right":
+			cx += pan
+		case "k", "up":
+			cy -= pan
+		case "j", "down":
+			cy += pan
+		case ".":
+			mi = min(miMax, mi+miStep)
+		case ",":
+			mi = max(miMin, mi-miStep)
+		case "r":
+			cx, cy, vw, mi = homeX, homeY, homeW, homeMaxiter
+		}
+	}
+}
+
 func main() {
 	mode := "bench"
 	if len(os.Args) > 1 {
@@ -79,6 +222,9 @@ func main() {
 	defer out.Flush()
 
 	switch mode {
+	case "interactive", "play", "i":
+		runInteractive(out)
+
 	case "render":
 		out.Write(render(100, 44, -0.75, 0.0, 3.2, 300))
 
