@@ -21,6 +21,7 @@ mutation check described below).
 |---|---|---|
 | CALL/RETURN never recurse into Go's stack; the whole call stack is heap data | ✅ holds | `TestDeepRecursionSurvivesTinyNativeStack`, `TestOneMillionDeep` |
 | `ensureStack` re-points every **open** upvalue on stack growth (the "easy thing to silently get wrong") | ✅ holds, and is load-bearing | `TestOpenUpvalueSurvivesStackRegrow` + a mutation check |
+| Two closures over the **same** variable share one cell — open *and* after the frame closes | ✅ holds, and is load-bearing | `TestSharedUpvalueOpen`, `TestSharedUpvalueClosed` + a mutation check |
 
 ### 1. Execution state lives on the heap, not Go's stack
 
@@ -67,6 +68,30 @@ Note this is the *open* case — the counter demo in `main.go` only exercises
 *closed* upvalues (captured after the owning frame returned). This probe is the
 first thing here to keep an upvalue open while the stack moves under it.
 
+### 3. Two closures over one variable share a cell
+
+`findOrCreateUpval` returns the *same* `Upvalue` for a given slot, so a reader
+and a writer closing over the same variable stay one variable — not two copies.
+The counter demo only shows *independent* counters (different slots), so it
+never exercises sharing. Two probes do:
+
+- `TestSharedUpvalueOpen` — reader and writer share while the owning frame is
+  still live. Trivially true (both alias the same stack slot), but it pins the
+  wiring.
+- `TestSharedUpvalueClosed` — the discriminating one. After the frame returns
+  (both closures captured the variable at `0`), a write **through the writer**
+  must be visible **through the reader**.
+
+| Build | `findOrCreateUpval` reuse check | Closed probe returns |
+|---|---|---|
+| real code | present | **7** ✓ |
+| mutant | removed (mints a new upvalue per capture) | **0** ✗ |
+
+The failure is the silent kind again: while open, two separate upvalues over one
+slot still alias the same stack cell and agree — they only diverge once the
+frame closes and each gets its own heap cell. Which is exactly why the *closed*
+probe, not the open one, is what catches it.
+
 ## Run it
 
 ```
@@ -87,9 +112,10 @@ opcode.go        32-bit packed instruction encoding (OP:6 A:8 B:9 C:9)
 vm.go            register VM: dispatch loop, call convention, open/close upvalues, ensureStack
 value.go         value repr + hybrid array+hash Table
 disasm.go        bytecode disassembler
-claim_test.go    deep non-tail recursion under a clamped native stack (heap-state claim)
-upval_test.go    open upvalue survives a stack regrow (ensureStack fixup claim)
-verify.sh        reproduce all of the above, incl. the optional mutation check
+claim_test.go        deep non-tail recursion under a clamped native stack (heap-state claim)
+upval_test.go        open upvalue survives a stack regrow (ensureStack fixup claim)
+shared_upval_test.go two closures over one variable share a cell, open and closed
+verify.sh            reproduce all of the above, incl. the optional mutation checks
 ```
 
 ## Status
