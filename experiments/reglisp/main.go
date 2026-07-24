@@ -29,6 +29,7 @@ func newDemoVM() *VM {
 		fmt.Println(strings.Join(parts, " "))
 		return Nil
 	})})
+	installList(vm)
 	return vm
 }
 
@@ -74,6 +75,19 @@ func main() {
 (tset! t "name" "reglisp")
 (print "t[2] =" (tget t 2))
 (print "t[name] =" (tget t "name"))
+`)
+
+	fmt.Println("\n--- immutable lists (cons cells) ---")
+	vmL := newDemoVM()
+	run(vmL, `
+(define xs (list 1 2 3))
+(define ys (cons 0 xs))
+(print "xs      =" xs)
+(print "ys      =" ys "  ; cons prepends in O(1)")
+(print "first ys=" (first ys))
+(print "rest ys =" (rest ys) "  ; shares xs's cells, no copy")
+(print "xs still=" xs "  ; ys never mutated xs")
+(print "count ys=" (count ys) " empty? (list)=" (empty? (list)))
 `)
 
 	fmt.Println("\n--- recursive fib(28), flat non-recursive Go dispatch loop ---")

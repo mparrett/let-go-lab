@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type ValueType uint8
 
@@ -12,6 +15,7 @@ const (
 	TTable
 	TClosure
 	TBuiltin
+	TList // immutable cons-cell list -- see list.go
 )
 
 // Value is Lua's "tagged union" idea (paper Section 3), Go-flavored. In ANSI C
@@ -90,6 +94,22 @@ func (v Value) String() string {
 		return fmt.Sprintf("closure: %p", v.Obj)
 	case TBuiltin:
 		return "builtin"
+	case TList:
+		var b strings.Builder
+		b.WriteByte('(')
+		for cur, first := v, true; ; first = false {
+			c, ok := cur.Obj.(*Cons)
+			if !ok || c == nil {
+				break // empty list / terminator
+			}
+			if !first {
+				b.WriteByte(' ')
+			}
+			b.WriteString(c.first.String())
+			cur = c.rest
+		}
+		b.WriteByte(')')
+		return b.String()
 	}
 	return "?"
 }

@@ -10,7 +10,9 @@ and open/closed upvalues for closures.
 The design doc (the prototype's own notes, paper-section mapping, and the list
 of deliberate simplifications) is preserved verbatim in [`NOTES.md`](./NOTES.md).
 This README is the **experiment**: it takes the three load-bearing claims from
-those notes and checks whether they actually hold, with reproducible tests.
+those notes and checks whether they actually hold, with reproducible tests —
+then adds one small feature (immutable lists) to probe how the architecture
+takes extension.
 
 Run everything with [`./verify.sh`](./verify.sh) (add `mutate` to also run the
 mutation check described below).
@@ -92,10 +94,42 @@ slot still alias the same stack cell and agree — they only diverge once the
 frame closes and each gets its own heap cell. Which is exactly why the *closed*
 probe, not the open one, is what catches it.
 
+## Extension: immutable cons-cell lists (`list.go`)
+
+Beyond verifying the prototype, this experiment adds one small feature: a
+Clojure/let-go-style immutable list, to see how far it reaches into the
+architecture. Answer: barely at all. `list`, `cons`, `first`, `rest`, `count`,
+`empty?`, and `list?` are ordinary **builtins** — they operate on
+already-evaluated `Value`s, exactly like `print` — so nothing in the reader,
+compiler, or VM changed. The whole addition is `list.go` plus a `TList` tag and
+a `String()` case in `value.go`.
+
+```lisp
+(define xs (list 1 2 3))
+(define ys (cons 0 xs))   ; O(1) prepend, one new cell
+(rest ys)                 ; => (1 2 3) -- the SAME cells as xs, not a copy
+xs                        ; => (1 2 3) -- untouched; ys never mutated it
+```
+
+Immutability is free (nothing writes a `Cons` after construction), so `rest`
+hands back the tail pointer and lists share structure safely;
+`TestConsStructuralSharingAndImmutability` pins the sharing by pointer identity.
+
+Two things are deliberately **out of scope**, because they're not builtins —
+they cross the code/data boundary and belong in a separate parallel experiment:
+
+- **Literal syntax + `quote`** (`'(1 2 3)`). An unquoted `(1 2 3)` compiles to a
+  *call*, so a literal list needs a `quote` special form — a reader + compiler
+  change — and quoting symbols forces a runtime symbol type the VM doesn't have.
+- **Structural equality.** `OpEq` compares by pointer identity, so
+  `(= (list 1) (list 1))` is `false` (empty lists are equal via the nil key).
+  Matching Clojure's value equality is a VM change.
+  See `TestListEqualityIsIdentityForNonEmpty`.
+
 ## Run it
 
 ```
-go run .          # the prototype's own demos: disassembly, closures, table, fib(28)
+go run .          # demos: disassembly, closures, table, immutable lists, fib(28)
 go test ./...     # the verification tests added by this experiment
 ./verify.sh       # both of the above, verbose
 ./verify.sh mutate  # + the ensureStack mutation check
@@ -110,11 +144,13 @@ reader.go        s-expression reader
 compile.go       one-pass compiler: closure/upvalue resolution + codegen
 opcode.go        32-bit packed instruction encoding (OP:6 A:8 B:9 C:9)
 vm.go            register VM: dispatch loop, call convention, open/close upvalues, ensureStack
-value.go         value repr + hybrid array+hash Table
+value.go         value repr + hybrid array+hash Table + TList printing
 disasm.go        bytecode disassembler
+list.go          immutable cons-cell lists + builtins (this experiment's extension)
 claim_test.go        deep non-tail recursion under a clamped native stack (heap-state claim)
 upval_test.go        open upvalue survives a stack regrow (ensureStack fixup claim)
 shared_upval_test.go two closures over one variable share a cell, open and closed
+list_test.go         cons/first/rest, structural sharing, empty + equality semantics
 verify.sh            reproduce all of the above, incl. the optional mutation checks
 ```
 
