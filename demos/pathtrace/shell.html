@@ -1,14 +1,21 @@
 <!--
   Client-owned shell for the pathtrace demo, bound to let-go ONLY through
-  window.LetGoHost (onReady/onOutput/sendInput/setSize). Adds @xterm/addon-image,
-  which decodes the iTerm2 inline-image escapes (OSC 1337) the .lg writes — the
-  image is a base64 PNG the program encodes itself (no sixel here). Content-sized
+  window.LetGoHost (onReady/onOutput/onSurface/sendInput/setSize). Content-sized
   to the image; baked into the bundle by inject-shell.sh.
 
-  Simpler than the mandelbrot shell: there's no sixel "scale" handshake. The PNG
-  is rendered small and the IIP escape asks the terminal to display it at a fixed
-  pixel size, so the shell only has to size the terminal to fit that image + the
-  text chrome. The program announces the on-screen image size via OSC 5002.
+  Two display paths, matching pathtrace.lg:
+
+    SURFACE — LetGoHost.onSurface hands us a raw RGBA ArrayBuffer per frame,
+    which goes straight to a <canvas> via putImageData. No decoding, no escape
+    parsing, no PNG. The terminal below the canvas carries only text chrome.
+
+    IIP — the fallback for an lg without the frame-sink capability. The program
+    encodes a PNG itself and writes an iTerm2 inline-image escape (OSC 1337),
+    decoded by @xterm/addon-image. Here the image is drawn INTO terminal cells,
+    so the grid has to be tall enough to hold it.
+
+  The program owns geometry and announces it via OSC 5002, including which path
+  is live; we adopt whatever it says rather than guessing.
 -->
 <!-- xterm CSS/JS + addons. harness/inline-assets.sh replaces this marker with the
      committed harness/vendor/xterm@5.5.0 files inlined (self-contained, offline).
@@ -18,7 +25,19 @@
   html, body { background: #000; margin: 0; height: 100%; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
   @media (orientation: landscape) { body { justify-content: center; } }
+  /* The host mount is a bare flex child in let-go's template (#app{flex:1}); this
+     demo is content-sized, so override that and stack canvas over terminal. */
+  #lg-mount {
+    flex: 0 0 auto; display: flex; flex-direction: column;
+    align-items: center; justify-content: flex-start; min-height: 0;
+  }
   #terminal { flex: 0 0 auto; }
+  /* The canvas backing store is the render resolution; CSS scales it up. Nearest
+     neighbour keeps the traced detail honest instead of inventing smoothness. */
+  #surface {
+    flex: 0 0 auto; display: none;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+  }
   /* Touch-only ⌨ toggle: re-summons the soft keyboard so the keyboard controls
      (hjkl n r q) stay reachable on a phone. */
   #kbd-toggle {
@@ -45,8 +64,8 @@
     term.loadAddon(fit);
 
     // addon-image: IIP (iTerm2 inline images) is enabled by default; that's the
-    // path this demo uses. sixel left on too (harmless), limits bumped so a full
-    // image isn't truncated.
+    // fallback path. Unused when the surface path is live, but loaded either way
+    // so a runtime without the frame sink still renders.
     const image = new ImageAddon.ImageAddon({
       pixelLimit: 4096 * 4096,
       iipSizeLimit: 25_000_000,
@@ -57,7 +76,22 @@
     // onOutput below): IMG_W × IMG_H are the ON-SCREEN image pixels, plus the
     // chrome row count and left margin. These fallbacks equal the program's
     // defaults so the first layout is already right.
-    let IMG_W = 320, IMG_H = 240, CHROME_ROWS = 8, MARGIN_COLS = 1;
+    let IMG_W = 320, IMG_H = 240, CHROME_ROWS = 8, MARGIN_COLS = 1, MODE = "iip";
+
+    // let-go's shell-less template mounts at #app since #378; it was #terminal on
+    // the v1.11.0 floor this repo supports. Accept either so one shell spans both.
+    const mount = document.getElementById("app") || document.getElementById("terminal");
+    mount.id = "lg-mount";
+
+    // Canvas first in the flow (image above the text chrome), terminal below.
+    const canvas = document.createElement("canvas");
+    canvas.id = "surface";
+    const ctx = canvas.getContext("2d");
+    mount.appendChild(canvas);
+
+    const termEl = document.createElement("div");
+    termEl.id = "terminal";
+    mount.appendChild(termEl);
 
     function cellDims() {
       try {
@@ -68,16 +102,22 @@
       return { w: 0.6 * f, h: 1.2 * f };
     }
 
+    // On the surface path the image is a sibling canvas, so the grid only needs
+    // the chrome rows; on the IIP path it must also contain the image itself.
     function gridFor(cell) {
       return {
         cols: Math.ceil(IMG_W / cell.w) + MARGIN_COLS,
-        rows: Math.ceil(IMG_H / cell.h) + CHROME_ROWS,
+        rows: MODE === "surface" ? CHROME_ROWS
+                                 : Math.ceil(IMG_H / cell.h) + CHROME_ROWS,
       };
     }
 
     let pending;
     function relayout() {
-      const termEl = document.getElementById("terminal");
+      canvas.style.display = MODE === "surface" ? "block" : "none";
+      canvas.style.width = IMG_W + "px";
+      canvas.style.height = IMG_H + "px";
+
       termEl.style.width = "100vw";
       termEl.style.height = "100vh";          // full viewport so fit() seeds cell metrics
       fit.fit();
@@ -88,14 +128,24 @@
       termEl.style.height = Math.ceil(cell.h * g.rows) + "px";
       if (window.LetGoHost && window.LetGoHost.setSize) window.LetGoHost.setSize(g.cols, g.rows);
       window.__lgGrid = g.cols + "x" + g.rows;
+      window.__lgMode = MODE;
     }
     function scheduleRelayout() { clearTimeout(pending); pending = setTimeout(relayout, 100); }
+
+    // Wired before onReady so surface/available? is already true when the guest
+    // takes its first look — otherwise the program would start on the IIP path
+    // and only switch after a frame. The payload is a transferred ArrayBuffer;
+    // Uint8ClampedArray views it in place rather than copying.
+    window.LetGoHost.onSurface((buf, w, h) => {
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
+      window.__lgFrames = (window.__lgFrames || 0) + 1;
+    });
 
     window.LetGoHost.onReady((mode) => {
       const statusEl = document.getElementById("status");
       if (statusEl) statusEl.style.display = "none";
-      const termEl = document.getElementById("terminal");
-      termEl.style.display = "block";
+      mount.style.display = "flex";
       term.open(termEl);
 
       // Suppress the soft keyboard by default (no physical keyboard on a phone),
@@ -123,13 +173,16 @@
       term.focus();
 
       window.LetGoHost.onOutput((s) => {
-        // Geometry announcement (OSC 5002;IMG_W;IMG_H;CHROME;COL0). The program is
-        // the single source of truth; adopt and relayout. Stripped before write.
-        s = s.replace(/\x1b\]5002;(\d+);(\d+);(\d+);(\d+)\x07/g, (_m, iw, ih, chrome, col0) => {
-          IMG_W = +iw; IMG_H = +ih; CHROME_ROWS = +chrome; MARGIN_COLS = +col0 - 1;
-          scheduleRelayout();
-          return "";
-        });
+        // Geometry announcement (OSC 5002;IMG_W;IMG_H;CHROME;COL0;MODE). The
+        // program is the single source of truth; adopt and relayout. Stripped
+        // before write. MODE is optional so an older .lg still matches.
+        s = s.replace(/\x1b\]5002;(\d+);(\d+);(\d+);(\d+)(?:;(\w+))?\x07/g,
+          (_m, iw, ih, chrome, col0, mode) => {
+            IMG_W = +iw; IMG_H = +ih; CHROME_ROWS = +chrome; MARGIN_COLS = +col0 - 1;
+            if (mode) MODE = mode;
+            scheduleRelayout();
+            return "";
+          });
         term.write(s);
       });
 
