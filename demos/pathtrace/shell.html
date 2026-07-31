@@ -136,11 +136,17 @@
     // takes its first look — otherwise the program would start on the IIP path
     // and only switch after a frame. The payload is a transferred ArrayBuffer;
     // Uint8ClampedArray views it in place rather than copying.
-    window.LetGoHost.onSurface((buf, w, h) => {
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-      ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
-      window.__lgFrames = (window.__lgFrames || 0) + 1;
-    });
+    //
+    // Guarded: onSurface only exists on an lg carrying the frame sink (#572).
+    // Calling it unconditionally throws before onReady is registered, which
+    // takes the whole shell down rather than degrading to the IIP path.
+    if (window.LetGoHost.onSurface) {
+      window.LetGoHost.onSurface((buf, w, h) => {
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
+        window.__lgFrames = (window.__lgFrames || 0) + 1;
+      });
+    }
 
     window.LetGoHost.onReady((mode) => {
       const statusEl = document.getElementById("status");
