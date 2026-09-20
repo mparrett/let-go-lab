@@ -15,14 +15,23 @@
   #pt-canvas {
     image-rendering: pixelated;            /* crisp integer upscale of the small render */
     background: #000; border: 1px solid #222;
-    width: min(90vw, 640px); height: auto; aspect-ratio: 4 / 3;
+    /* No aspect-ratio: with width set and height auto, a canvas uses its own
+       intrinsic ratio, which is whatever RES in ptcanvas.lg makes it (96x96
+       today, square). Pinning 4/3 here stretched that square render sideways,
+       and would go wrong again the next time RES changes. */
+    width: min(90vw, 640px); height: auto;
+  }
+  /* Shown only when the runtime lands in main-thread mode, where it cannot take
+     keys -- see the onReady handler. */
+  #pt-note {
+    font-size: 13px; color: #d7a65b; text-align: center; max-width: min(90vw, 640px);
   }
   #pt-status { font-size: 13px; color: #9a988f; white-space: pre; text-align: center; }
   #pt-title { font-size: 13px; color: #cfcfcf; }
 </style>
 <script>
   (function () {
-    function start() {
+    function start(mode) {
       // The base lg page ships a mount + #status; we use neither, and its mount
       // is flex:1, so leaving it visible pushes our canvas down the page. The
       // mount is #app since let-go v1.12.0 (nooga/let-go#378) and #terminal
@@ -32,15 +41,33 @@
         if (el) el.style.display = "none";
       }
 
+      // 'worker' means cross-origin isolated, so the SAB input ring is live and
+      // sendInput can take keys. Any other mode is the main-thread fallback,
+      // where it cannot -- the runtime says so itself ("Interactive input
+      // unavailable"), but it says it through the terminal output this shell
+      // hides, so that notice has to be re-surfaced here or it reaches nobody.
+      const interactive = mode === "worker";
+
       const title = document.createElement("div");
       title.id = "pt-title";
-      title.textContent = "ptcanvas · let-go → <canvas> · allocation-free PT · r reset · q quit";
+      title.textContent = "ptcanvas · let-go → <canvas> · allocation-free PT"
+        + (interactive ? " · r reset · q quit" : "");
       const canvas = document.createElement("canvas");
       canvas.id = "pt-canvas";
       const status = document.createElement("div");
       status.id = "pt-status";
       status.textContent = "starting…";
       document.body.append(title, canvas, status);
+
+      if (!interactive) {
+        const note = document.createElement("div");
+        note.id = "pt-note";
+        note.textContent =
+          "Interactive input unavailable — no cross-origin isolation, so the runtime "
+          + "fell back to main-thread mode and cannot receive keys. The render still "
+          + "runs; r/reset and q/quit do not. Serve with COOP/COEP to enable them.";
+        document.body.append(note);
+      }
 
       const ctx = canvas.getContext("2d");
 
@@ -59,16 +86,20 @@
       });
 
       // Keyboard → VM input ring. Single chars pass through; arrows become CSI.
-      const CSI = { ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D" };
-      window.addEventListener("keydown", (e) => {
-        const seq = CSI[e.key] || (e.key.length === 1 ? e.key : "");
-        if (seq && window.LetGoHost.sendInput(seq)) e.preventDefault();
-      });
+      // Not bound at all in main-thread mode: sendInput cannot deliver there, so
+      // binding it would swallow the page's keys to no effect.
+      if (interactive) {
+        const CSI = { ArrowUp: "\x1b[A", ArrowDown: "\x1b[B", ArrowRight: "\x1b[C", ArrowLeft: "\x1b[D" };
+        window.addEventListener("keydown", (e) => {
+          const seq = CSI[e.key] || (e.key.length === 1 ? e.key : "");
+          if (seq && window.LetGoHost.sendInput(seq)) e.preventDefault();
+        });
+      }
 
       // A default size so the worker's size handshake (if any) is satisfied.
       if (window.LetGoHost.setSize) window.LetGoHost.setSize(80, 24);
     }
 
-    window.LetGoHost.onReady(() => start());
+    window.LetGoHost.onReady((mode) => start(mode));
   })();
 </script>
