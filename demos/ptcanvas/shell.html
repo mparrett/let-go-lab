@@ -23,9 +23,14 @@
 <script>
   (function () {
     function start() {
-      // The base lg page ships #terminal/#status; we don't use them.
-      const t = document.getElementById("terminal"); if (t) t.style.display = "none";
-      const s = document.getElementById("status"); if (s) s.style.display = "none";
+      // The base lg page ships a mount + #status; we use neither, and its mount
+      // is flex:1, so leaving it visible pushes our canvas down the page. The
+      // mount is #app since let-go v1.12.0 (nooga/let-go#378) and #terminal
+      // before that -- hide whichever this build shipped.
+      for (const id of ["app", "terminal", "status"]) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+      }
 
       const title = document.createElement("div");
       title.id = "pt-title";
