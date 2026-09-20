@@ -26,7 +26,8 @@ vendor-xterm:
 # lg version + which let-go this points at
 env:
     @echo "LETGO = {{LETGO}}"
-    @"{{LETGO}}/lg" --version 2>/dev/null || echo "no lg at {{LETGO}}/lg (build it: make -C {{LETGO}} build)"
+    @. scripts/lib/lg-path.sh; lg="$(lg_path "{{LETGO}}")"; echo "lg path = $lg"; \
+     "$lg" --version 2>/dev/null || echo "no lg under {{LETGO}} (build it: make -C {{LETGO}} build)"
 
 # remove built bundles
 clean:

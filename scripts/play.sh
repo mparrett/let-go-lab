@@ -16,7 +16,9 @@ set -euo pipefail
 
 LAB="$(cd "$(dirname "$0")/.." && pwd)"
 LETGO="${LETGO:-$LAB/let-go}"
-LG="$LETGO/lg"
+# shellcheck source=scripts/lib/lg-path.sh
+. "$LAB/scripts/lib/lg-path.sh"
+LG="$(lg_path "$LETGO")"
 DEMO="${1:-mandelbrot}"
 LGFILE="$LAB/demos/$DEMO/$DEMO.lg"
 

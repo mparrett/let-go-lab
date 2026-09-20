@@ -19,7 +19,9 @@ LAB="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$LAB" || exit 1
 LETGO="${LETGO:-$LAB/let-go}"
 export LETGO
-LG="$LETGO/lg"
+# shellcheck source=scripts/lib/lg-path.sh
+. "$LAB/scripts/lib/lg-path.sh"
+LG="$(lg_path "$LETGO")"
 PORT="${CI_PORT:-8252}"
 
 STRICT="${CI_STRICT:-}"
@@ -41,10 +43,10 @@ absent() {
 
 group "shell lint (bash -n + shellcheck)"
 sh_files=()
-for f in scripts/*.sh harness/*.sh; do [[ -f "$f" ]] && sh_files+=("$f"); done
+for f in scripts/*.sh scripts/lib/*.sh harness/*.sh; do [[ -f "$f" ]] && sh_files+=("$f"); done
 run "bash -n" bash -n "${sh_files[@]}"
 if command -v shellcheck >/dev/null; then
-  run "shellcheck" shellcheck "${sh_files[@]}"
+  run "shellcheck" shellcheck -x "${sh_files[@]}"
 else
   absent "shellcheck" "not installed"
 fi
