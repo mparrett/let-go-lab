@@ -1,17 +1,28 @@
 ;; pathtrace.lg — standalone let-go WASM demo: a small progressive Monte Carlo
-;; path tracer. Unlike the mandelbrot demo (sixel), this encodes its own PNG and
-;; displays it inline via the iTerm2 inline-image protocol (OSC 1337), which the
-;; browser shell's @xterm/addon-image decodes (kitty is NOT decoded by that
-;; addon; iTerm2 IIP is, by default). The same escape shows the image in iTerm2
-;; natively. base64 is the transport, which matters: a let-go String is UTF-8, so
-;; bytes >127 cannot be placed into one without corruption — base64 keeps every
-;; emitted byte in 0..127. Native non-iTerm / headless runs decode the same base64
-;; to a real out.png via `openssl` (a raw byte file likewise can't be built as a
-;; String, so we hand the bytes to a decoder).
+;; path tracer. It has two display paths and picks whichever the host offers.
+;;
+;; SURFACE (preferred). When the host wires an RGBA frame sink, `surface/present`
+;; hands it the tone-mapped buffer directly and the whole encode step disappears:
+;; no PNG, no base64, no escape sequence. The browser shell blits it to a canvas
+;; with putImageData. This is the reason the text path below exists at all — an
+;; RGBA frame is far too big to escape-encode through the *out* text seam, so
+;; before let-go had a buffer carrier the only way out of the guest was to make
+;; the image small enough to spell.
+;;
+;; IIP (fallback). Encodes its own PNG and displays it inline via the iTerm2
+;; inline-image protocol (OSC 1337), which the browser shell's @xterm/addon-image
+;; decodes (kitty is NOT decoded by that addon; iTerm2 IIP is, by default). The
+;; same escape shows the image in iTerm2 natively. base64 is the transport, which
+;; matters: a let-go String is UTF-8, so bytes >127 cannot be placed into one
+;; without corruption — base64 keeps every emitted byte in 0..127. Native
+;; non-iTerm / headless runs decode the same base64 to a real out.png via
+;; `openssl` (a raw byte file likewise can't be built as a String, so we hand the
+;; bytes to a decoder).
 ;;
 ;; Pipeline per frame: trace +1 sample/pixel into a float accumulation buffer ->
-;; tone-map the running average to 8-bit RGB -> encode-png -> base64 -> iTerm2
-;; IIP escape -> term/write. Convergence is the show: each pass lowers the noise.
+;; tone-map the running average to 8-bit RGB(A) -> present the buffer, or encode
+;; PNG -> base64 -> iTerm2 IIP escape -> term/write. Convergence is the show:
+;; each pass lowers the noise.
 
 (ns pathtrace
   (:require [term]
@@ -255,21 +266,54 @@
 
 (defn clampi [v] (max 0 (min 255 (int v))))
 
-;; Average the accumulation, Reinhard tone-map, gamma 2.2, quantize to 8-bit.
+;; One averaged linear channel -> one 8-bit sRGB-ish byte: Reinhard tone-map,
+;; gamma 2.2, quantize. Shared by both tone-map loops so the two display paths
+;; can never drift into showing different images.
+(defn tone-byte [v]
+  (let [m (/ v (+ 1.0 v))]
+    (clampi (* 255.0 (math/pow m (/ 1.0 2.2))))))
+
+;; Average the accumulation and tone-map to packed 8-bit RGB (the PNG path).
 (defn tonemap [accum spp]
   (let [fb (make-array :byte (* W H 3)) inv (/ 1.0 (float spp))]
     (loop [i 0]
       (when (< i (* W H 3))
-        (let [v (* (aget accum i) inv)
-              m (/ v (+ 1.0 v))
-              g (math/pow m (/ 1.0 2.2))]
-          (aset fb i (clampi (* 255.0 g))))
+        (aset fb i (tone-byte (* (aget accum i) inv)))
         (recur (inc i))))
+    fb))
+
+;; Same tone map, but packed RGBA with an opaque alpha — the layout surface/present
+;; requires (exactly w*h*4 bytes, validated host-side). Walking pixels rather than
+;; channels keeps the differing strides (3 in, 4 out) out of the inner arithmetic.
+(defn tonemap-rgba [accum spp]
+  (let [n (* W H)
+        fb (make-array :byte (* n 4))
+        inv (/ 1.0 (float spp))]
+    (loop [p 0]
+      (when (< p n)
+        (let [si (* p 3) di (* p 4)]
+          (aset fb di        (tone-byte (* (aget accum si) inv)))
+          (aset fb (+ di 1)  (tone-byte (* (aget accum (+ si 1)) inv)))
+          (aset fb (+ di 2)  (tone-byte (* (aget accum (+ si 2)) inv)))
+          (aset fb (+ di 3)  255))
+        (recur (inc p))))
     fb))
 
 ;; ===========================================================================
 ;; Display + disk output
 ;; ===========================================================================
+;; The surface namespace only exists on an lg carrying the RGBA frame-sink
+;; capability, so resolve it rather than naming it directly — an older runtime
+;; would otherwise fail to compile the file at all. resolve returns nil for an
+;; unknown name; the try guards runtimes where a missing namespace throws instead.
+(def surface-present   (try (resolve 'surface/present)    (catch e nil)))
+(def surface-available? (try (resolve 'surface/available?) (catch e nil)))
+
+;; Checked per frame, not once at boot: available? tracks a *wired sink*, and the
+;; browser shell may register onSurface after the program has already started.
+(defn surface-ready? []
+  (and surface-available? (surface-available?)))
+
 ;; iTerm2 inline-image escape carrying a base64 PNG, shown at DISP scale. Decoded
 ;; by @xterm/addon-image (browser) and iTerm2 (native); other terminals ignore the
 ;; unknown OSC. size = decoded byte count (the addon uses it as a sanity bound).
@@ -298,12 +342,33 @@
 (def COL0 2)
 (def IMG-ROW0 6)
 (def CHROME-ROWS 8)
+;; Surface path: the image lives on its own canvas, so the terminal grid only has
+;; to hold the status block (rows 2-4) and the timing line.
+(def SURFACE-CHROME-ROWS 7)
+(def SURFACE-TIMING-ROW 6)
 
-(defn announce-geometry []
-  ;; Tell the shell the on-screen image size (px) + chrome rows so it content-sizes
-  ;; the terminal. Native terminals ignore the unknown OSC.
-  (term/write (str ESC "]5002;" (* W DISP) ";" (* H DISP) ";" CHROME-ROWS ";" COL0 (char 7)))
+;; Tell the shell the on-screen image size (px), the chrome rows, and which
+;; display path is live. Native terminals ignore the unknown OSC. The mode field
+;; matters because the two paths need different terminal geometry: an IIP image
+;; is drawn INTO terminal cells (so the grid must be tall enough to hold it),
+;; while a presented surface is a separate canvas element and the terminal only
+;; has to carry the text chrome.
+(defn announce-geometry [mode]
+  (term/write (str ESC "]5002;" (* W DISP) ";" (* H DISP) ";"
+                   (if (= mode "surface") SURFACE-CHROME-ROWS CHROME-ROWS) ";"
+                   COL0 ";" mode (char 7)))
   (term/flush))
+
+;; Re-announced whenever the active path changes, not just at boot: the browser
+;; shell registers its onSurface sink asynchronously, so the first frame or two
+;; can legitimately render before the surface path becomes available.
+(def announced-mode (atom nil))
+
+(defn announce-mode! [mode]
+  (when (not= @announced-mode mode)
+    (reset! announced-mode mode)
+    (term/clear)
+    (announce-geometry mode)))
 
 (defn setup! []
   (term/raw-mode!)
@@ -320,28 +385,46 @@
 
 (def CLEAR-EOL (str ESC "[K"))
 
-(defn status [scene spp]
+(defn status [scene spp path]
   (term/move-cursor COL0 2)
-  (term/write (str "pathtrace · let-go · PNG/iTerm-IIP" CLEAR-EOL))
+  (term/write (str "pathtrace · let-go · " path CLEAR-EOL))
   (term/move-cursor COL0 3)
   (term/write (str "scene " scene " · " spp " spp · " W "×" H CLEAR-EOL))
   (term/move-cursor COL0 4)
   (term/write (str "hjkl·orbit n·scene r·reset q·quit" CLEAR-EOL)))
 
+;; Present via the host frame sink: tone-map to RGBA and hand the buffer over.
+;; The status/timing chrome still goes out as text, so the shell composites a
+;; canvas under a terminal. No image escape is written on this path.
+(defn show-surface [scene-idx accum spp compute-ms]
+  (let [t0 (inst-ms (now))
+        fb (tonemap-rgba accum spp)
+        _ (surface-present fb W H)
+        present-ms (- (inst-ms (now)) t0)]
+    (status scene-idx spp "RGBA surface")
+    (term/move-cursor COL0 SURFACE-TIMING-ROW)
+    (term/write (str "compute " compute-ms "ms · present " present-ms "ms /pass" CLEAR-EOL))
+    (term/flush)))
+
 ;; Render the current accumulation to an inline image at (COL0, IMG-ROW0), with a
 ;; bottom timing bar written relative to where the image left the cursor.
-(defn show [scene-idx sc cp accum spp compute-ms]
+(defn show-iip [scene-idx accum spp compute-ms]
   (let [t0 (inst-ms (now))
         fb (tonemap accum spp)
         png (encode-png W H fb)
         b64 (base64 png)
         encode-ms (- (inst-ms (now)) t0)]
-    (status scene-idx spp)
+    (status scene-idx spp "PNG/iTerm-IIP")
     (term/move-cursor COL0 IMG-ROW0)
     (term/write (iip-escape png b64))
     (term/write (str ESC "[J"))                ; clear any stale rows below
     (term/write (str "\r\n " "compute " compute-ms "ms · encode " encode-ms "ms /pass" CLEAR-EOL))
     (term/flush)))
+
+(defn show [scene-idx sc cp accum spp compute-ms]
+  (if (surface-ready?)
+    (do (announce-mode! "surface") (show-surface scene-idx accum spp compute-ms))
+    (do (announce-mode! "iip")     (show-iip scene-idx accum spp compute-ms))))
 
 ;; Arrow keys (CSI) as orbit aliases for hjkl.
 (def up (str ESC "[A")) (def down (str ESC "[B"))
@@ -423,7 +506,9 @@
     (do
       (setup!)
       (try
-        (announce-geometry)
+        ;; Announce the best-known geometry up front so the shell is sized before
+        ;; the first (slow) pass lands; show re-announces if the path changes.
+        (announce-mode! (if (surface-ready?) "surface" "iip"))
         (loop-keys 0)
         (finally (teardown!))))))
 

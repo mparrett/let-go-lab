@@ -157,12 +157,13 @@ def check_viewport(p, tag, w, h, want_scale):
 
 def check_resize_race(p):
     """Regression for the dropped-scale handshake (PR #13 review): a resize whose
-    'S<n>' send is dropped (1-slot key ring busy) must still converge — the
-    program's rendered scale must eventually match window.__lgScale.
+    'S<n>' send is dropped (key ring full) must still converge — the program's
+    rendered scale must eventually match window.__lgScale.
 
-    Reproduce the drop: start a render, queue an unrelated key so the slot is
-    occupied, then resize. The resize's S2 is refused; only the retry path makes
-    it land. The buggy version (ack-on-send) never retries and stays mismatched.
+    Reproduce the drop: start a render, fill the key ring with unrelated keys
+    while it's busy, then resize. The resize's S2 is refused; only the retry path
+    makes it land. The buggy version (ack-on-send) never retries and stays
+    mismatched.
     """
     fails = []
     pg, errs = new_page(p, 1280, 900)
@@ -179,13 +180,27 @@ def check_resize_race(p):
     }""")
 
     # Start a render (program reads '+' immediately since it's parked), then fill
-    # the 1-slot key ring with an unrelated key while it's busy — so the upcoming
-    # resize send hits an occupied slot and is dropped.
+    # the key ring with unrelated keys while it's busy — so the upcoming resize
+    # send hits a full ring and is dropped.
+    #
+    # Ring capacity is a runtime detail, not something to hard-code: it was a
+    # single slot through let-go v1.12.x and became an 8-slot SPSC ring in #595,
+    # which made a lone filler key stop reproducing the drop. Push filler until
+    # the producer actually refuses one, so this reproduces on either runtime.
+    # (The consumer coalesces adjacent identical keys as it drains; that happens
+    # after the ring is already full, so it doesn't affect filling.)
     pg.evaluate("() => window.LetGoHost.sendInput('+')")   # consumed at once → render starts
     pg.wait_for_timeout(800)                               # ensure it's mid-render, not reading
-    pg.evaluate("() => window.LetGoHost.sendInput('x')")   # occupies the slot mid-render
+    filled = pg.evaluate("""() => {
+      for (let i = 0; i < 64; i++) {
+        if (!window.LetGoHost.sendInput('x')) return i;    // refused → ring is full
+      }
+      return -1;
+    }""")
+    if filled < 0:
+        fails.append("race: key ring never filled in 64 sends; test inconclusive")
 
-    # Resize narrow → shell wants scale 2; its S2 send hits the busy slot.
+    # Resize narrow → shell wants scale 2; its S2 send hits the full ring.
     pg.set_viewport_size({"width": 390, "height": 780})
     pg.evaluate("() => window.dispatchEvent(new Event('resize'))")
     pg.wait_for_timeout(400)
