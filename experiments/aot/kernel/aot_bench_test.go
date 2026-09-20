@@ -14,9 +14,14 @@ func TestMandelAOTValue(t *testing.T) {
 }
 
 func BenchmarkMandelAOT(b *testing.B) {
-	var sink int
+	// int64, with an explicit conversion: the lowered return type widened from
+	// int to int64 in let-go v1.13.0 (the 64-bit-across-the-rt-boundary work,
+	// nooga/let-go#906). The conversion is a no-op on a build that already
+	// returns int64 and widens on an older one, so this template still compiles
+	// against both.
+	var sink int64
 	for i := 0; i < b.N; i++ {
-		sink = MandelBench(nil, 96)
+		sink = int64(MandelBench(nil, 96))
 	}
 	_ = sink
 }

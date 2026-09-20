@@ -128,4 +128,30 @@ inferred `cx`/`cy` as `int` and emitted non-compiling `float64 + int` Go — is 
   sites hand-unboxed to compile at all
   ([#562](https://github.com/nooga/let-go/issues/562)), and the resulting binary
   runs `-main` twice — once interpreted, once natively. The AOT column above is
-  the native pass.
+  the native pass. The double `-main` run is **fixed** in let-go v1.13.0
+  ([#902](https://github.com/nooga/let-go/pull/902)); the #562 hand-unboxing is
+  not, which is why that column is the one below that was not re-measured.
+
+- **Re-measured 2026-09-19 on `v1.13.0` (`369e2a6`), same machine (Apple M2).**
+  The table above is left at its 2026-09-04 vintage deliberately — the AOT
+  column needs the manual #562 unboxing to reproduce, so replacing only the
+  other three would produce exactly the mixed-vintage table the note above warns
+  against. Directly comparable numbers, same harnesses, same workload
+  (`bytes=27695` unchanged, so the work is identical):
+
+  | Phase | VM 09-04 | VM 09-19 | Native 09-04 | Native 09-19 |
+  |---|---|---|---|---|
+  | Compute | 115 ms | **96 ms** | 1.348 ms | **1.244 ms** |
+  | Encode | 151 ms | **129 ms** | 1.635 ms | **1.495 ms** |
+  | Frame | 266 ms | **225 ms** | 3.038 ms | **2.971 ms** |
+
+  The AOT micro-kernel went 1.343 ms → **1.268 ms** (3 runs at `-benchtime=3s`,
+  1.265/1.272/1.268 — the spread is under 1%).
+
+  The VM gained 15–17% while the native port moved 2–8%, so the VM→native ratios
+  *narrowed*: compute 85× → 77×, encode 92× → 86×, frame 88× → 76×. Read that as
+  the interpreter closing ground, not the port regressing. Caveat: the box was at
+  load average ~4–5 during this run, so treat the absolutes as soft. A first pass
+  at `-benchtime=2s` put the AOT kernel at 1.665 ms, ~24% off; the 3s runs above
+  did not reproduce it, so short-benchtime numbers on a loaded box are not
+  trustworthy here.
