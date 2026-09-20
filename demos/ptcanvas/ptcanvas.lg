@@ -1,0 +1,260 @@
+;; ptcanvas.lg — allocation-free path tracer, a faithful let-go port of
+;; tracer_opt.mjs ("Allocation-free JS PT: scalars only, scene as flat arrays,
+;; per-depth scratch"). The point: test whether the manual-unboxing trick that
+;; makes the JS version fast also helps in the let-go interpreter. No vec3 objects
+;; — every vector is loose scalars threaded through args; the scene is flat
+;; double-arrays; radiance writes its result into a caller-supplied scratch array
+;; (one per recursion depth) instead of returning a fresh vector. Zero allocation
+;; in the trace loop.
+;;
+;; Renders the smallpt-style scene (emissive sphere + giant-sphere walls + diffuse
+;; and mirror spheres) to a <canvas> via the surface seam in the browser; a non-TTY
+;; native run prints M paths/s for comparison with the JS/C++ originals.
+
+(ns ptcanvas
+  (:require [term]
+            [math]))
+
+(def TAU 6.283185307179586)
+
+;; Scene as struct-of-arrays (10 spheres). Sphere 0 emits; 1..6 are walls (giant
+;; spheres); 7 diffuse; 8,9 mirrors. Matches tracer_opt.mjs exactly.
+(def CX (double-array [0.0 0.0 0.0 1003.0 -1003.0 0.0 0.0 -2.0 2.0 2.0]))
+(def CY (double-array [-2.0 -1003.0 1003.0 0.0 0.0 0.0 0.0 -2.0 -3.0 -1.0]))
+(def CZ (double-array [5.0 0.0 0.0 0.0 0.0 -1003.0 1006.0 4.0 4.0 4.0]))
+(def R2 (double-array [1.0 1e6 1e6 1e6 1e6 1e6 1e6 2.0 1.0 1.0]))
+
+;; Per-depth scratch — radiance(depth) hands SC[depth] to its child as the result
+;; buffer, so recursion allocates nothing.
+(def SC (mapv (fn [_] (make-array :double 3)) (range 8)))
+
+;; radiance: trace ray (ox,oy,oz)+(dx,dy,dz) at `depth`, write RGB into `out`.
+(defn radiance [ox oy oz dx dy dz depth out]
+  (loop [i 0 best -1 t 1.0e6]
+    (if (< i 10)
+      (let [ocx (- (aget CX i) ox)
+            ocy (- (aget CY i) oy)
+            ocz (- (aget CZ i) oz)
+            b (+ (* dx ocx) (* dy ocy) (* dz ocz))
+            cc (- (+ (* ocx ocx) (* ocy ocy) (* ocz ocz)) (aget R2 i))
+            disc (- (* b b) cc)]
+        (if (< disc 0.0)
+          (recur (inc i) best t)
+          (let [sd (math/sqrt disc) r (- b sd)]
+            (if (and (> r 0.0) (< r t))
+              (recur (inc i) i r)
+              (recur (inc i) best t)))))
+      ;; intersection done — best,t known; shade.
+      (if (or (> depth 5) (< best 0))
+        (do (aset out 0 0.0) (aset out 1 0.0) (aset out 2 0.0))
+        (if (= best 0)
+          (do (aset out 0 0.9) (aset out 1 0.5) (aset out 2 0.1))
+          (let [px (+ ox (* dx t)) py (+ oy (* dy t)) pz (+ oz (* dz t))
+                nx0 (- px (aget CX best)) ny0 (- py (aget CY best)) nz0 (- pz (aget CZ best))
+                iv (/ 1.0 (math/sqrt (+ (* nx0 nx0) (* ny0 ny0) (* nz0 nz0))))
+                nx (* nx0 iv) ny (* ny0 iv) nz (* nz0 iv)
+                o2 (nth SC depth)]
+            (if (>= best 8)
+              ;; mirror: reflect d about N, scale child by k.
+              (let [dn (+ (* nx dx) (* ny dy) (* nz dz))]
+                (radiance px py pz (- dx (* 2.0 dn nx)) (- dy (* 2.0 dn ny)) (- dz (* 2.0 dn nz)) (inc depth) o2)
+                (let [k (/ (- (float best) 6.5) 2.0)]
+                  (aset out 0 (* (aget o2 0) k))
+                  (aset out 1 (* (aget o2 1) k))
+                  (aset out 2 (* (aget o2 2) k))))
+              ;; diffuse: cosine-weighted bounce, multiply child by albedo.
+              (let [ar (if (= best 3) 0.0 1.0)
+                    ag (if (= best 4) 0.0 1.0)
+                    ab (if (or (= best 3) (= best 4)) 0.0 1.0)
+                    az (* TAU (rand))
+                    aa (math/sqrt (rand))
+                    cs (math/sqrt (- 1.0 (* aa aa)))
+                    ux0 (- (* (- dy) nz) (* (- dz) ny))
+                    uy0 (- (* (- dz) nx) (* (- dx) nz))
+                    uz0 (- (* (- dx) ny) (* (- dy) nx))
+                    ul (/ 1.0 (math/sqrt (+ (* ux0 ux0) (* uy0 uy0) (* uz0 uz0))))
+                    ux (* ux0 ul) uy (* uy0 ul) uz (* uz0 ul)
+                    tx (- (* uy nz) (* uz ny))
+                    ty (- (* uz nx) (* ux nz))
+                    tz (- (* ux ny) (* uy nx))
+                    ca (* (math/cos az) aa) sa (* (math/sin az) aa)
+                    bx0 (+ (* tx ca) (* ux sa) (* nx cs))
+                    by0 (+ (* ty ca) (* uy sa) (* ny cs))
+                    bz0 (+ (* tz ca) (* uz sa) (* nz cs))
+                    bl (/ 1.0 (math/sqrt (+ (* bx0 bx0) (* by0 by0) (* bz0 bz0))))]
+                (radiance px py pz (* bx0 bl) (* by0 bl) (* bz0 bl) (inc depth) o2)
+                (aset out 0 (* (aget o2 0) ar))
+                (aset out 1 (* (aget o2 1) ag))
+                (aset out 2 (* (aget o2 2) ab))))))))))
+
+;; Camera with a thin lens (DoF), as in tracer_opt.mjs. Maps pixel (col,row) on a
+;; res×res image to [-1,1]², traces one jittered sample into `out`.
+(defn trace-pixel [col row res out]
+  (let [s (/ 2.0 (float res))
+        px (- (* (float col) s) 1.0)
+        py (- (* (float row) s) 1.0)
+        fpx px fpy (- py) fpz 1.0
+        fl (/ 4.0 (math/sqrt (+ (* fpx fpx) (* fpy fpy) (* fpz fpz))))
+        a (* TAU (rand)) rd (* 0.2 (math/sqrt (rand)))
+        lx (* (math/cos a) rd) ly (* (math/sin a) rd)
+        ddx (- (* fpx fl) lx) ddy (- (* fpy fl) ly) ddz (* fpz fl)
+        dl (/ 1.0 (math/sqrt (+ (* ddx ddx) (* ddy ddy) (* ddz ddz))))]
+    (radiance lx ly 0.0 (* ddx dl) (* ddy dl) (* ddz dl) 0 out)))
+
+;; ===== vec3 (allocating) reference — SAME scene + algorithm as the scalar version
+;; above, but built the natural Clojure way: 3-element vectors, ops returning fresh
+;; vectors, radiance returning a new [r g b]. This is the allocation-heavy style our
+;; original demo uses; benching it head-to-head with the scalar version isolates the
+;; cost of the per-op vector allocation (the thing the JS _opt version eliminates).
+(defn v+ [a b] [(+ (nth a 0)(nth b 0)) (+ (nth a 1)(nth b 1)) (+ (nth a 2)(nth b 2))])
+(defn vs* [a s] [(* (nth a 0) s) (* (nth a 1) s) (* (nth a 2) s)])
+(defn vm* [a b] [(* (nth a 0)(nth b 0)) (* (nth a 1)(nth b 1)) (* (nth a 2)(nth b 2))])
+(defn vdot [a b] (+ (* (nth a 0)(nth b 0)) (* (nth a 1)(nth b 1)) (* (nth a 2)(nth b 2))))
+(defn vnorm [a] (vs* a (/ 1.0 (math/sqrt (vdot a a)))))
+(defn vcross [a b] [(- (* (nth a 1)(nth b 2))(* (nth a 2)(nth b 1)))
+                    (- (* (nth a 2)(nth b 0))(* (nth a 0)(nth b 2)))
+                    (- (* (nth a 0)(nth b 1))(* (nth a 1)(nth b 0)))])
+(defn sc-c [i] [(aget CX i)(aget CY i)(aget CZ i)])
+
+(defn radiance-vec [o d depth]
+  (let [hit (loop [i 0 best -1 t 1.0e6]
+              (if (>= i 10) [best t]
+                (let [oc (v+ (sc-c i) (vs* o -1.0))
+                      b (vdot d oc)
+                      cc (- (vdot oc oc) (aget R2 i))
+                      disc (- (* b b) cc)]
+                  (if (< disc 0.0) (recur (inc i) best t)
+                    (let [r (- b (math/sqrt disc))]
+                      (if (and (> r 0.0) (< r t)) (recur (inc i) i r) (recur (inc i) best t)))))))
+        best (nth hit 0) t (nth hit 1)]
+    (cond
+      (or (> depth 5) (< best 0)) [0.0 0.0 0.0]
+      (= best 0) [0.9 0.5 0.1]
+      :else
+      (let [P (v+ o (vs* d t))
+            N (vnorm (v+ P (vs* (sc-c best) -1.0)))]
+        (if (>= best 8)
+          (vs* (radiance-vec P (v+ d (vs* N (* -2.0 (vdot N d)))) (inc depth)) (/ (- (float best) 6.5) 2.0))
+          (let [al (cond (= best 3) [0.0 1.0 0.0] (= best 4) [1.0 0.0 0.0] :else [1.0 1.0 1.0])
+                az (* TAU (rand)) A (math/sqrt (rand))
+                U (vnorm (vcross (vs* d -1.0) N))
+                T (vcross U N)
+                bd (vnorm (v+ (v+ (vs* T (* (math/cos az) A)) (vs* U (* (math/sin az) A)))
+                              (vs* N (math/sqrt (- 1.0 (* A A))))))]
+            (vm* (radiance-vec P bd (inc depth)) al)))))))
+
+(defn trace-pixel-vec [col row res]
+  (let [s (/ 2.0 (float res)) px (- (* (float col) s) 1.0) py (- (* (float row) s) 1.0)
+        fp (vs* [px (- py) 1.0] (/ 4.0 (math/sqrt (+ (* px px) (* py py) 1.0))))
+        a (* TAU (rand)) rd (* 0.2 (math/sqrt (rand)))
+        lx (* (math/cos a) rd) ly (* (math/sin a) rd)
+        d (vnorm [(- (nth fp 0) lx) (- (nth fp 1) ly) (nth fp 2)])]
+    (radiance-vec [lx ly 0.0] d 0)))
+
+;; ===== headless A/B bench: scalar (alloc-free) vs vec3 (allocating), same scene.
+;; M paths/s is directly comparable to tracer_opt.mjs / tracer.mjs. =====
+;; One pixel -> its gamma-mapped red byte (a cheap checksum that forces the work).
+(defn px-scalar [col row res spp out]
+  (loop [k 0 s 0.0]
+    (if (>= k spp)
+      (int (* 255.0 (math/pow (max 0.0 (min 1.0 (* (/ s (float spp)) 2.0))) 0.45)))
+      (do (trace-pixel col row res out) (recur (inc k) (+ s (aget out 0)))))))
+
+(defn px-vec [col row res spp]
+  (loop [k 0 s 0.0]
+    (if (>= k spp)
+      (int (* 255.0 (math/pow (max 0.0 (min 1.0 (* (/ s (float spp)) 2.0))) 0.45)))
+      (recur (inc k) (+ s (nth (trace-pixel-vec col row res) 0))))))
+
+(defn bench-loop [res pxf]
+  (loop [row 0 acc 0]
+    (if (>= row res) acc
+      (recur (inc row)
+             (loop [col 0 a acc]
+               (if (>= col res) a
+                 (recur (inc col) (+ a (pxf col row)))))))))
+
+(defn round3 [x] (/ (float (int (* x 1000.0))) 1000.0))
+
+(defn run-bench []
+  (let [res 96 spp 8 out (make-array :double 3) paths (* res res spp)
+        t0 (inst-ms (now))
+        c1 (bench-loop res (fn [col row] (px-scalar col row res spp out)))
+        dt1 (/ (float (- (inst-ms (now)) t0)) 1000.0)
+        t1 (inst-ms (now))
+        c2 (bench-loop res (fn [col row] (px-vec col row res spp)))
+        dt2 (/ (float (- (inst-ms (now)) t1)) 1000.0)
+        r1 (/ (/ (float paths) dt1) 1.0e6)
+        r2 (/ (/ (float paths) dt2) 1.0e6)]
+    (println (str "scene smallpt · res=" res " spp=" spp " · " paths " paths each"))
+    (println (str "  scalar (alloc-free): " (round3 dt1) "s  " (round3 r1) " M paths/s  chk=" c1))
+    (println (str "  vec3   (allocating): " (round3 dt2) "s  " (round3 r2) " M paths/s  chk=" c2))
+    (println (str "  speedup (scalar/vec3): " (round3 (/ r1 r2)) "x"))))
+
+;; ===== canvas display (browser) =====
+;; Modest render res so the first browser pass lands in a few seconds (the smallpt
+;; scene's 10 spheres make each ray ~2× our scene; the canvas upscales it). Compute
+;; dominates, so this is the responsiveness knob (see dev notes).
+(def RES 96)
+(def max-spp 512)
+(def up (str (char 27) "[A")) (def down (str (char 27) "[B"))
+
+(defn render-pass [accum out]
+  (loop [row 0]
+    (when (< row RES)
+      (loop [col 0]
+        (when (< col RES)
+          (trace-pixel col row RES out)
+          (let [idx (* 3 (+ (* row RES) col))]
+            (aset accum idx (+ (aget accum idx) (aget out 0)))
+            (aset accum (+ idx 1) (+ (aget accum (+ idx 1)) (aget out 1)))
+            (aset accum (+ idx 2) (+ (aget accum (+ idx 2)) (aget out 2))))
+          (recur (inc col))))
+      (recur (inc row)))))
+
+(defn tonemap-rgba [accum spp]
+  (let [n (* RES RES) fb (make-array :byte (* n 4)) inv (/ 1.0 (float spp))]
+    (loop [i 0]
+      (when (< i n)
+        (let [a (* 3 i) o (* 4 i)
+              tone (fn [c] (let [v (* (* c inv) 2.0)
+                                 v (max 0.0 (min 1.0 v))]
+                             (int (* 255.0 (math/pow v 0.45)))))]
+          (aset fb o (tone (aget accum a)))
+          (aset fb (+ o 1) (tone (aget accum (+ a 1))))
+          (aset fb (+ o 2) (tone (aget accum (+ a 2))))
+          (aset fb (+ o 3) 255))
+        (recur (inc i))))
+    fb))
+
+(defn run-canvas []
+  (let [out (make-array :double 3)]
+    (loop [accum (make-array :double (* RES RES 3)) spp 0]
+      (let [refine? (< spp max-spp)
+            t0 (inst-ms (now))
+            _ (when refine? (render-pass accum out))
+            spp' (if refine? (inc spp) spp)
+            compute-ms (- (inst-ms (now)) t0)]
+        (when refine?
+          (let [pt0 (inst-ms (now))
+                fb (tonemap-rgba accum spp')]
+            (surface/present fb RES RES)
+            (js/emit :status {:spp spp' :w RES :h RES :compute compute-ms
+                              :present (- (inst-ms (now)) pt0)})))
+        (if (and refine? (not (term/key-pending?)))
+          (recur accum spp')
+          (let [k (term/read-key)]
+            (cond
+              (nil? k) nil
+              (= k "q") nil
+              (= k "r") (recur (make-array :double (* RES RES 3)) 0)
+              :else (recur accum spp'))))))))
+
+(defn -main []
+  (set-rand-seed! 1)
+  (if (surface/available?)
+    (run-canvas)
+    (run-bench)))
+
+(when-not *compiling-aot*
+  (-main))
