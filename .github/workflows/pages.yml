@@ -23,9 +23,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Pinned let-go commit — same SHA + bump process as ci.yml. The lab never
-  # builds lg itself; it runs a stock upstream build.
-  LETGO_PIN: 5ba842f59f5e75fe6681eca7a005ecdd3da5fdf5
+  # Pinned let-go RELEASE — same bump process as ci.yml, and keep the two in step.
+  # The lab never builds lg itself; it runs a stock upstream build.
+  #
+  # Was 5ba842f5 (2026-06-27) until 2026-09-19: a floating commit, three months
+  # stale, and the same drift trap ci.yml's pin was. Tags are bumpable on
+  # purpose; a SHA nobody revisits is not.
+  #
+  # Validated 2026-09-19 against v1.13.0 by building _site/ locally and serving
+  # it over plain HTTP (no COOP/COEP) so the coi-serviceworker path is the one
+  # exercised: renders identically to the headered build.
+  LETGO_PIN: v1.13.0
 
 jobs:
   build:
@@ -36,7 +44,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - name: Build let-go (pinned upstream)
         run: |
@@ -44,7 +52,8 @@ jobs:
           git -C let-go-upstream checkout "$LETGO_PIN"
           make -C let-go-upstream build
           ln -sfn "$PWD/let-go-upstream" let-go
-          ./let-go/lg --version || true
+          . scripts/lib/lg-path.sh
+          "$(lg_path "$PWD/let-go")" --version || true
 
       - name: Build Pages site
         run: scripts/build-pages.sh

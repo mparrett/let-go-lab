@@ -28,10 +28,22 @@ This repo never builds lg — it only runs it. Point it at one of:
 - `LETGO=/path/to/let-go just serve …` to override per-invocation.
 
 The demos need an lg carrying the client-owned shell (the `-w-shell` flag, #245)
-and SGR mouse input (#313). **Use let-go ≥ 1.11.0** — the first tagged release
-with both, plus the IR/lowering perf gains the sixel encoder benefits from. A
-newer `main` works too; CI pins the `v1.11.0` tag (`.github/workflows/ci.yml`),
-and the build path feature-probes for `-w-shell`, failing clearly if it's absent.
+and SGR mouse input (#313). **let-go ≥ 1.11.0** is the floor — the first tagged
+release with both, plus the IR/lowering perf gains the sixel encoder benefits
+from. A newer `main` works too. The build path feature-probes for `-w-shell`,
+failing clearly if it's absent.
+
+**CI pins `v1.13.0`** (`.github/workflows/ci.yml`), and that is the version the
+demos are actually verified against — bump the pin toward the newest release
+rather than holding it at the floor. Holding it at v1.11.0 is what let
+nooga/let-go#378 (wasm host mount `#terminal` → `#app`, v1.12.0) break both
+browser demos for two minor versions with CI green. The shells accept either
+mount id, so the 1.11.0 floor still stands, but only the pinned version is
+tested. Note the pin also fixes the Go toolchain: v1.13.0's `go.mod` needs Go
+1.27, so bumping one means bumping `go-version` too.
+
+`lg` itself is resolved by `scripts/lib/lg-path.sh`, which prefers `$LETGO/bin/lg`
+(upstream's promoted copy) over a leftover `$LETGO/lg` at the checkout root.
 
 ## Recipes (`just`)
 

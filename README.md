@@ -14,9 +14,10 @@ just play            # native TUI (needs a sixel-capable terminal)
 just serve           # build + serve in the browser; open the printed URL
 ```
 
-Both default to the `mandelbrot` demo and to `./let-go/lg` (the symlinked
-checkout) — use **let-go ≥ 1.11.0**. See [CLAUDE.md](CLAUDE.md) for the lg
-requirement, cert setup for LAN/phone serving, and how to add a demo.
+Both default to the `mandelbrot` demo and to the lg in the symlinked checkout
+(`./let-go`) — use **let-go ≥ 1.11.0**, and prefer the tag CI pins. See
+[CLAUDE.md](CLAUDE.md) for the lg requirement, cert setup for LAN/phone serving,
+and how to add a demo.
 
 ## Demos
 
