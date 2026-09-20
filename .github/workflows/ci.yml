@@ -12,16 +12,22 @@ on:
 
 env:
   # Pinned let-go RELEASE (nooga/let-go). The lab never builds lg itself; it runs
-  # a stock upstream build. v1.11.0 is the first tagged release carrying the
-  # client-owned shell (-w-shell, #245), SGR mouse input (#313), and the IR/
-  # lowering perf gains the sixel encoder benefits from — so it's also the
-  # supported version floor (see README / CLAUDE.md). Pinning a tag keeps CI
-  # reproducible while naming that floor; the full clone below fetches tags, so
-  # `git checkout` resolves it. To bump: pick a newer tag, build + run
-  # `scripts/ci.sh` against it locally, then update this value. Validated
-  # 2026-06-28 (demo builds, bench + suite pass; bytes=27695).
-  # Resolved SHA: f9048d899a740364b2aeb9a3ee046f8ea9956c5b
-  LETGO_PIN: v1.11.0
+  # a stock upstream build. Pinning a tag keeps CI reproducible; the full clone
+  # below fetches tags, so `git checkout` resolves it. To bump: pick a newer tag,
+  # build + run `scripts/ci.sh` against it locally, then update this value AND
+  # the go-version below to match that tag's go.mod.
+  #
+  # Held at v1.11.0 until 2026-09-19. That was the oldest release the demos
+  # supported, so it was also the least likely to catch upstream drift — and it
+  # did not: v1.12.0 renamed the wasm host mount #terminal -> #app (#378) and
+  # both browser demos threw on load for two minor versions with CI green the
+  # whole time. Prefer the newest release here; the floor the demos *support* is
+  # a separate claim, documented in README / CLAUDE.md.
+  #
+  # Validated 2026-09-19 against v1.13.0: demo builds, suite passes,
+  # viewport_fit_test passes at phone-390 and desktop.
+  # Resolved SHA: 369e2a69
+  LETGO_PIN: v1.13.0
 
 jobs:
   smoke:
@@ -32,7 +38,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27'
 
       - uses: actions/setup-python@v5
         with:
@@ -55,7 +61,8 @@ jobs:
           git -C let-go-upstream checkout "$LETGO_PIN"
           make -C let-go-upstream build
           ln -sfn "$PWD/let-go-upstream" let-go
-          ./let-go/lg --version || true
+          . scripts/lib/lg-path.sh
+          "$(lg_path "$PWD/let-go")" --version || true
 
       - name: Smoke suite
         run: scripts/ci.sh

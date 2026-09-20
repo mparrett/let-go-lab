@@ -18,7 +18,7 @@
   html, body { background: #000; margin: 0; height: 100%; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
   @media (orientation: landscape) { body { justify-content: center; } }
-  #terminal { flex: 0 0 auto; }
+  #app, #terminal { flex: 0 0 auto; }
   /* Touch-only ⌨ toggle: re-summons the soft keyboard so the keyboard controls
      (hjkl n r q) stay reachable on a phone. */
   #kbd-toggle {
@@ -75,9 +75,16 @@
       };
     }
 
+    // The host page's mount is #app since let-go v1.12.0 (nooga/let-go#378,
+    // "neutral #app host mount"); v1.11.0 and earlier called it #terminal. Accept
+    // either so the demo runs on both sides of that rename — CI pins v1.11.0.
+    function mountEl() {
+      return document.getElementById("app") || document.getElementById("terminal");
+    }
+
     let pending;
     function relayout() {
-      const termEl = document.getElementById("terminal");
+      const termEl = mountEl();
       termEl.style.width = "100vw";
       termEl.style.height = "100vh";          // full viewport so fit() seeds cell metrics
       fit.fit();
@@ -94,7 +101,7 @@
     window.LetGoHost.onReady((mode) => {
       const statusEl = document.getElementById("status");
       if (statusEl) statusEl.style.display = "none";
-      const termEl = document.getElementById("terminal");
+      const termEl = mountEl();
       termEl.style.display = "block";
       term.open(termEl);
 
