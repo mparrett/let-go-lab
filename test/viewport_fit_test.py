@@ -105,7 +105,8 @@ def check_viewport(p, tag, w, h, want_scale):
     # --- layout + center-click invariant on one load ---
     pg, errs = load(p, w, h)
     info = pg.evaluate(
-        "() => {const el=document.getElementById('terminal');const r=el.getBoundingClientRect();"
+        "() => {const el=document.getElementById('app')||document.getElementById('terminal');"
+        "const r=el.getBoundingClientRect();"
         "return {scale:window.__lgScale, grid:window.__lgGrid, termW:Math.round(r.width), "
         "vpW:window.innerWidth, overflowX:Math.round(r.width)>window.innerWidth+1};}"
     )

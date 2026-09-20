@@ -20,11 +20,11 @@
   /* Content-sized terminal box (relayout sizes it to the image + text rows),
      horizontally centered. Vertically: TOP on portrait/mobile (black fills
      below), CENTERED on landscape/desktop (letterbox). Overrides the lg host's
-     body{flex-direction:column} #terminal{flex:1} (which would fill the screen). */
+     body{flex-direction:column} mount{flex:1} (which would fill the screen). */
   body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
   @media (orientation: landscape) { body { justify-content: center; } }
   /* transition eases the pop-to-bright when a freshly computed frame lands */
-  #terminal { flex: 0 0 auto; transition: filter 0.15s ease-out; }
+  #app, #terminal { flex: 0 0 auto; transition: filter 0.15s ease-out; }
   /* Touch-only ⌨ toggle (created in JS): re-summons the soft keyboard we
      suppress by default, so the keyboard controls (hjkl ,. r q) stay reachable
      on a phone. Floats over the top-right corner; .on marks it active. */
@@ -107,9 +107,16 @@
       };
     }
 
+    // The host page's mount is #app since let-go v1.12.0 (nooga/let-go#378,
+    // "neutral #app host mount"); v1.11.0 and earlier called it #terminal. Accept
+    // either so the demo runs on both sides of that rename — CI pins v1.11.0.
+    function mountEl() {
+      return document.getElementById("app") || document.getElementById("terminal");
+    }
+
     let pending;
     function relayout() {
-      const termEl = document.getElementById("terminal");
+      const termEl = mountEl();
       termEl.style.width = "100vw";
       termEl.style.height = "100vh";          // full viewport so fit() seeds cell metrics
       fit.fit();
@@ -141,7 +148,7 @@
     window.LetGoHost.onReady((mode) => {
       const statusEl = document.getElementById("status");
       if (statusEl) statusEl.style.display = "none";
-      const termEl = document.getElementById("terminal");
+      const termEl = mountEl();
       termEl.style.display = "block";
       term.open(termEl);
       // xterm focuses its hidden helper textarea on every pointer-down to catch
