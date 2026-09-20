@@ -164,6 +164,12 @@ def check_resize_race(p):
     Reproduce the drop: start a render, queue an unrelated key so the slot is
     occupied, then resize. The resize's S2 is refused; only the retry path makes
     it land. The buggy version (ack-on-send) never retries and stays mismatched.
+
+    That provocation stopped working upstream: nooga/let-go#595 replaced the
+    1-slot SAB key input with an SPSC ring whose producer never refuses a send,
+    so on a current let-go there is no drop left to provoke. Convergence is
+    asserted either way; the drop-recovery half reports itself as unexercised
+    instead of failing. Delete this once the 1-slot path is gone for good.
     """
     fails = []
     pg, errs = new_page(p, 1280, 900)
@@ -208,8 +214,14 @@ def check_resize_race(p):
     drops = sum(1 for s, r in sends if s == "S2" and r is False)   # shell's S2 refused (slot busy)
     if want != 2:
         fails.append(f"race: shell did not request scale 2 (__lgScale={want})")
-    if drops == 0:
-        fails.append(f"race: did not reproduce a dropped S2 send (sends={sends}); test inconclusive")
+    # drops == 0 used to mean "setup failed, we learned nothing". Since
+    # nooga/let-go#595 (SPSC ring + held-key coalesce for SAB key input) it is
+    # instead the EXPECTED result: the producer never refuses a send, so the
+    # 1-slot-busy drop this provokes cannot happen on a build carrying that
+    # change. Convergence below still asserts the end-to-end behaviour the
+    # regression is about; only the retry path goes unexercised. Report that
+    # rather than failing, which would make every future run red.
+    inconclusive = drops == 0
     if not converged:
         fails.append(f"race: rendered scale {final} never matched __lgScale {want} "
                      f"within {RACE_TIMEOUT // 1000}s (drops={drops}, sends={sends})")
@@ -220,8 +232,13 @@ def check_resize_race(p):
     for f in fails:
         print("FAIL", f)
     if not fails:
-        print(f"PASS race: {drops} dropped S2 send(s) recovered — rendered scale "
-              f"converged {start}→{final} == __lgScale {want}")
+        if inconclusive:
+            print(f"PASS race: rendered scale converged {start}→{final} == __lgScale {want} "
+                  f"(no S2 drop to recover from — expected on let-go with the #595 SPSC "
+                  f"ring; the retry path itself went unexercised)")
+        else:
+            print(f"PASS race: {drops} dropped S2 send(s) recovered — rendered scale "
+                  f"converged {start}→{final} == __lgScale {want}")
     return not fails
 
 
