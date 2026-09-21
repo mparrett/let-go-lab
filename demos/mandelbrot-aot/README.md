@@ -20,9 +20,12 @@ still hand-wired (see nooga/let-go#425).
   `(* 0.03125 col)` (int × float). The hints are load-bearing: they're why the
   params lower to native `float64` instead of `int`.
 - **`gen/aot/kernel/kernel.go`** (generated) — the lowered result:
-  `func Escape(ec *vm.ExecContext, cx float64, cy float64, mi int) int` — a raw
-  `for` loop on unboxed `float64`, no VM dispatch, no boxing. `CxOf(col int)
-  float64` widens the int column (nooga/let-go#534).
+  `func Escape(ec *vm.ExecContext, cx float64, cy float64, mi int64) int64` — a
+  raw `for` loop on unboxed `float64`, no VM dispatch, no boxing.
+  `CxOf(col int64) float64` widens the column (nooga/let-go#534). The integer
+  params and returns were `int` before let-go v1.13.0 and widened to `int64`
+  there (nooga/let-go#906); `native/main.go` converts at the call sites to
+  match.
 - **`native/main.go`** — the Go driver that calls the lowered funcs directly (no
   VM boot needed). It renders truecolor ANSI cells and runs a live, keyboard-driven
   fractal (`interactive` mode) — the same home view and key bindings as the VM
@@ -33,11 +36,15 @@ still hand-wired (see nooga/let-go#425).
 
 ## Build & run
 
-Needs a **let-go ≥ 1.12** checkout (the `^double` AOT param hints, #357/#534).
+Needs a **let-go ≥ 1.13** checkout. The `^double` AOT param hints (#357/#534)
+landed in 1.12, but v1.13.0 widened the lowered integer params and returns from
+`int` to `int64` (nooga/let-go#906), and `native/main.go` calls the current
+signatures — on 1.12 it fails to compile with `int`/`int64` type errors.
+`build.sh` checks for this and says so rather than letting Go report it.
 `build.sh` defaults to the repo's `../../let-go` symlink; override with `LG=`.
 
 ```sh
-./build.sh                      # or: LG=/path/to/let-go-1.12 ./build.sh
+./build.sh                      # or: LG=/path/to/let-go-1.13 ./build.sh
 ./mandel-native interactive     # live, keyboard-driven fractal — pan/zoom it yourself
 ./mandel-native zoom 240 0 0    # scripted uncapped zoom (delay=0) — feel the speed
 ./mandel-native ascii           # static plain-ASCII fractal

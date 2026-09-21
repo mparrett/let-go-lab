@@ -3,7 +3,7 @@
 A spike on let-go's `lg-compile` AOT path (`lower-all-ns-to-go`): how fast the
 mandelbrot demo's hot path gets when its `.lg` is lowered to native Go instead of
 interpreted, and where the lowering stops. Originally cut against let-go 1.11.0;
-re-validated on current tip (see Caveats).
+re-measured on current tip 2026-09-04 (see Caveats).
 
 For the polished, interactive version of this — the escape kernel lowered with
 `^double` param hints, a live native-vs-VM zoom, and a GIF — see the
@@ -13,24 +13,31 @@ measurement harness.
 
 ## Result
 
-Same workload (160×120 grid, maxiter 96, the demo's home view), three ways (the
-original v1.11.0 run; re-validated on tip within noise — see Caveats):
+Same workload (160×120 grid, maxiter 96, the demo's home view), three ways.
+Measured 2026-09-04 on let-go tip `bdd8268c` (`v1.12.2-95`), one machine
+(Apple M2) — read as ratios, not absolutes.
 
-| Phase | Interpreted (VM) | Native Go | Speedup | Lowers under `lg-compile`? |
-|---|---|---|---|---|
-| Compute (escape-time) | ~97 ms | 1.2 ms | ~79× | yes |
-| Encode (sixel) | ~120 ms | 1.4 ms | ~83× | no — boxes to `vm.Value` |
-| Frame | ~217 ms | 2.7 ms | ~81× | partial |
+| Phase | VM | AOT-lowered | Native Go | VM→AOT | VM→native |
+|---|---|---|---|---|---|
+| Compute (escape-time) | 115 ms | 10 ms | 1.348 ms | 11.5× | 85× |
+| Encode (sixel) | 151 ms | 57–69 ms | 1.635 ms | 2.2–2.6× | 92× |
+| Frame | 266 ms | 79 ms | 3.038 ms | 3.4× | 88× |
 
-The compute kernel lowers to a native `float64` loop, and the AOT output benches
-within noise of the hand-written port (~1.3 ms, ~70× over interpreted) — for pure
-arithmetic the lowering is near-optimal. The encoder can't lower today, but the
-native port shows the boxing-heavy half is the bigger prize: ~83× sits unrealized
-there. Two upstream findings came out of the spike:
-[nooga/let-go#357](https://github.com/nooga/let-go/issues/357) (float params typed
-`int`) — since **fixed**, so hinted float params now lower — and
+AOT figures are the whole demo built through `lg-compile --entry-frame`; frame
+is the sum of its two phases. **The compute column needs `^double` hints** — the
+demo's own unhinted `escape` lowers to `int` params, and the call site's type
+guard then falls back to the VM, so compute stays at 115 ms with no diagnostic
+([#551](https://github.com/nooga/let-go/issues/551)).
+
+For pure arithmetic the lowering is near-optimal: the AOT micro-kernel benches
+at 1.343 ms against the hand-written port's 1.348 ms. The encoder is the
+opposite story — it *does* lower now, but to boxed `vm.Value` Go, which buys
+2.2–2.6×. The hand-written port shows what the same code is worth unboxed, so
+**35–42× remains unrealized** behind
 [#358](https://github.com/nooga/let-go/issues/358) (native homogeneous
-collections), still open, which is what caps the encoder.
+collections), still open. The spike's other finding,
+[#357](https://github.com/nooga/let-go/issues/357) (float params typed `int`),
+is **fixed** for hinted params; the inference half is #551 above.
 
 ## Layout
 
@@ -88,7 +95,7 @@ for {
 }
 ```
 
-## What doesn't lower yet
+## Where the lowering stops
 
 The spike surfaced two gaps. The first — **float params typed as `int`**
 ([#357](https://github.com/nooga/let-go/issues/357)), where `(defn escape [cx cy mi] …)`
@@ -98,9 +105,11 @@ inferred `cx`/`cy` as `int` and emitted non-compiling `float64 + int` Go — is 
 
 - **Collections and strings box to `vm.Value`** ([#358](https://github.com/nooga/let-go/issues/358)).
   The sixel encoder is `transient`/`assoc!`/`nth`/`str`/`subs` over vectors and
-  strings, none of which have a native Go type in the lowering, so it stays on
-  runtime trampolines. The `native/` port is what a collection-lowering would
-  emit; the ~83× gap is the measured prize.
+  strings, none of which have a native Go type in the lowering. The encoder does
+  lower — but into Go that keeps every element access on a boxed `ec.Invoke`, so
+  the inner loop still pays VM dispatch. The `native/` port is what a
+  collection-lowering would emit; the 35–42× between AOT and that port is the
+  measured prize.
 
 ## Caveats
 
@@ -110,6 +119,39 @@ inferred `cx`/`cy` as `int` and emitted non-compiling `float64 + int` Go — is 
   the demo's coordinate setup uses Clojure-style single-precision `(float …)`
   while the port is float64, flipping a handful of escape-boundary pixels. Output
   stays byte-equivalent (27794 vs 27695).
-- Measured on let-go v1.11.0 (`f9048d8`) and re-validated on current tip
-  (`f154c7f`): interpreted compute ~93 ms, AOT ~1.27 ms, native compute 1.23 ms —
-  within noise of the original. One machine — read as ratios, not absolutes.
+- Numbers above are 2026-09-04 on tip `bdd8268c`. Earlier revisions of this
+  table carried a v1.11.0 run (`f9048d8`, compute ~97 ms / encode ~120 ms /
+  native encode ~1.4 ms). Those are not reconciled with today's and should not
+  be mixed with them: the AOT and native ratios shift materially depending on
+  which baseline you pair with which port measurement.
+- Building the full demo through `--entry-frame` currently needs three `math/*`
+  sites hand-unboxed to compile at all
+  ([#562](https://github.com/nooga/let-go/issues/562)), and the resulting binary
+  runs `-main` twice — once interpreted, once natively. The AOT column above is
+  the native pass. The double `-main` run is **fixed** in let-go v1.13.0
+  ([#902](https://github.com/nooga/let-go/pull/902)); the #562 hand-unboxing is
+  not, which is why that column is the one below that was not re-measured.
+
+- **Re-measured 2026-09-19 on `v1.13.0` (`369e2a6`), same machine (Apple M2).**
+  The table above is left at its 2026-09-04 vintage deliberately — the AOT
+  column needs the manual #562 unboxing to reproduce, so replacing only the
+  other three would produce exactly the mixed-vintage table the note above warns
+  against. Directly comparable numbers, same harnesses, same workload
+  (`bytes=27695` unchanged, so the work is identical):
+
+  | Phase | VM 09-04 | VM 09-19 | Native 09-04 | Native 09-19 |
+  |---|---|---|---|---|
+  | Compute | 115 ms | **96 ms** | 1.348 ms | **1.244 ms** |
+  | Encode | 151 ms | **129 ms** | 1.635 ms | **1.495 ms** |
+  | Frame | 266 ms | **225 ms** | 3.038 ms | **2.971 ms** |
+
+  The AOT micro-kernel went 1.343 ms → **1.268 ms** (3 runs at `-benchtime=3s`,
+  1.265/1.272/1.268 — the spread is under 1%).
+
+  The VM gained 15–17% while the native port moved 2–8%, so the VM→native ratios
+  *narrowed*: compute 85× → 77×, encode 92× → 86×, frame 88× → 76×. Read that as
+  the interpreter closing ground, not the port regressing. Caveat: the box was at
+  load average ~4–5 during this run, so treat the absolutes as soft. A first pass
+  at `-benchtime=2s` put the AOT kernel at 1.665 ms, ~24% off; the 3s runs above
+  did not reproduce it, so short-benchtime numbers on a loaded box are not
+  trustworthy here.

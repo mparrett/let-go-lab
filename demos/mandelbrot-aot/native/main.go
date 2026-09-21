@@ -46,8 +46,8 @@ func render(W, H int, cx0, cy0, spanX float64, mi int) []byte {
 		cy := cy0 - spanY/2 + spanY*float64(row)/float64(H)
 		for col := 0; col < W; col++ {
 			cx := cx0 - spanX/2 + spanX*float64(col)/float64(W)
-			it := k.Escape(nil, cx, cy, mi)
-			if it >= mi { // interior
+			it := k.Escape(nil, cx, cy, int64(mi))
+			if it >= int64(mi) { // interior
 				if colorOn {
 					buf = append(buf, "\x1b[38;2;10;10;20m "...)
 				} else {
@@ -60,7 +60,7 @@ func render(W, H int, cx0, cy0, spanX float64, mi int) []byte {
 				buf = appendCell(buf, int(9+246*t), int(20+120*t*t), int(120+135*(1-t)), ramp[int(t*float64(len(ramp)-1))])
 			} else {
 				// mi-independent: char from raw iteration count → no maxiter coupling.
-				buf = append(buf, ramp[it%len(ramp)])
+				buf = append(buf, ramp[int(it)%len(ramp)])
 			}
 		}
 		if colorOn {
@@ -332,9 +332,9 @@ func main() {
 				cy := cy0 - spanY/2 + spanY*float64(row)/float64(H)
 				for col := 0; col < W; col++ {
 					cx := cx0 - span/2 + span*float64(col)/float64(W)
-					it := k.Escape(nil, cx, cy, mi)
-					sum += int64(it)
-					if it >= mi {
+					it := k.Escape(nil, cx, cy, int64(mi))
+					sum += it
+					if it >= int64(mi) {
 						interior++
 					} else if row < H/2 && col < W/2 {
 						ulDetail++ // escaping (non-black) cells in the upper-left quadrant
@@ -362,9 +362,9 @@ func main() {
 		for r := 0; r < reps; r++ {
 			sum = 0
 			for row := 0; row < H; row++ {
-				cy := k.CyOf(nil, row)
+				cy := k.CyOf(nil, int64(row))
 				for col := 0; col < W; col++ {
-					sum += int64(k.Escape(nil, k.CxOf(nil, col), cy, MI))
+					sum += k.Escape(nil, k.CxOf(nil, int64(col)), cy, MI)
 				}
 			}
 		}
