@@ -158,12 +158,13 @@ def check_viewport(p, tag, w, h, want_scale):
 
 def check_resize_race(p):
     """Regression for the dropped-scale handshake (PR #13 review): a resize whose
-    'S<n>' send is dropped (1-slot key ring busy) must still converge — the
-    program's rendered scale must eventually match window.__lgScale.
+    'S<n>' send is dropped (key ring full) must still converge — the program's
+    rendered scale must eventually match window.__lgScale.
 
-    Reproduce the drop: start a render, queue an unrelated key so the slot is
-    occupied, then resize. The resize's S2 is refused; only the retry path makes
-    it land. The buggy version (ack-on-send) never retries and stays mismatched.
+    Reproduce the drop: start a render, fill the key ring with unrelated keys
+    while it is busy, then resize. The resize's S2 is refused; only the retry
+    path makes it land. The buggy version (ack-on-send) never retries and stays
+    mismatched.
 
     Ring capacity is a runtime detail, not something to hard-code: it was a
     single slot through let-go v1.12.x and became an 8-slot SPSC ring in
@@ -171,11 +172,12 @@ def check_resize_race(p):
     drop. Push filler until the producer actually refuses one and the drop
     reproduces on either runtime. (The consumer coalesces adjacent identical
     keys as it drains, but that happens after the ring is already full, so it
-    does not affect filling.)
+    does not affect filling. It is also why the budget below still holds: the
+    fillers collapse into one read rather than one render apiece.)
     """
     fails = []
     pg, errs = new_page(p, 1280, 900)
-    start = wait_settled(pg)   # parked at read-key, slot free
+    start = wait_settled(pg)   # parked at read-key, ring empty
     if start != 3:
         fails.append(f"race: expected initial rendered scale 3, got {start}")
 
@@ -220,7 +222,7 @@ def check_resize_race(p):
 
     final = read_scale(pg)
     sends = pg.evaluate("() => window.__lgSends")
-    drops = sum(1 for s, r in sends if s == "S2" and r is False)   # shell's S2 refused (slot busy)
+    drops = sum(1 for s, r in sends if s == "S2" and r is False)   # shell's S2 refused (ring full)
     if want != 2:
         fails.append(f"race: shell did not request scale 2 (__lgScale={want})")
     if drops == 0:
