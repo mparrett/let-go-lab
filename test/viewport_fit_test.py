@@ -158,22 +158,26 @@ def check_viewport(p, tag, w, h, want_scale):
 
 def check_resize_race(p):
     """Regression for the dropped-scale handshake (PR #13 review): a resize whose
-    'S<n>' send is dropped (1-slot key ring busy) must still converge — the
-    program's rendered scale must eventually match window.__lgScale.
+    'S<n>' send is dropped (key ring full) must still converge — the program's
+    rendered scale must eventually match window.__lgScale.
 
-    Reproduce the drop: start a render, queue an unrelated key so the slot is
-    occupied, then resize. The resize's S2 is refused; only the retry path makes
-    it land. The buggy version (ack-on-send) never retries and stays mismatched.
+    Reproduce the drop: start a render, fill the key ring with unrelated keys
+    while it is busy, then resize. The resize's S2 is refused; only the retry
+    path makes it land. The buggy version (ack-on-send) never retries and stays
+    mismatched.
 
-    That provocation stopped working upstream: nooga/let-go#595 replaced the
-    1-slot SAB key input with an SPSC ring whose producer never refuses a send,
-    so on a current let-go there is no drop left to provoke. Convergence is
-    asserted either way; the drop-recovery half reports itself as unexercised
-    instead of failing. Delete this once the 1-slot path is gone for good.
+    Ring capacity is a runtime detail, not something to hard-code: it was a
+    single slot through let-go v1.12.x and became an 8-slot SPSC ring in
+    nooga/let-go#595, which is why a lone filler key stopped reproducing the
+    drop. Push filler until the producer actually refuses one and the drop
+    reproduces on either runtime. (The consumer coalesces adjacent identical
+    keys as it drains, but that happens after the ring is already full, so it
+    does not affect filling. It is also why the budget below still holds: the
+    fillers collapse into one read rather than one render apiece.)
     """
     fails = []
     pg, errs = new_page(p, 1280, 900)
-    start = wait_settled(pg)   # parked at read-key, slot free
+    start = wait_settled(pg)   # parked at read-key, ring empty
     if start != 3:
         fails.append(f"race: expected initial rendered scale 3, got {start}")
 
@@ -186,13 +190,20 @@ def check_resize_race(p):
     }""")
 
     # Start a render (program reads '+' immediately since it's parked), then fill
-    # the 1-slot key ring with an unrelated key while it's busy — so the upcoming
-    # resize send hits an occupied slot and is dropped.
+    # the key ring with unrelated keys while it's busy — so the upcoming resize
+    # send hits a full ring and is dropped.
     pg.evaluate("() => window.LetGoHost.sendInput('+')")   # consumed at once → render starts
     pg.wait_for_timeout(800)                               # ensure it's mid-render, not reading
-    pg.evaluate("() => window.LetGoHost.sendInput('x')")   # occupies the slot mid-render
+    filled = pg.evaluate("""() => {
+      for (let i = 0; i < 64; i++) {
+        if (!window.LetGoHost.sendInput('x')) return i;    // refused → ring is full
+      }
+      return -1;
+    }""")
+    if filled < 0:
+        fails.append("race: key ring never filled in 64 sends; test inconclusive")
 
-    # Resize narrow → shell wants scale 2; its S2 send hits the busy slot.
+    # Resize narrow → shell wants scale 2; its S2 send hits the full ring.
     pg.set_viewport_size({"width": 390, "height": 780})
     pg.evaluate("() => window.dispatchEvent(new Event('resize'))")
     pg.wait_for_timeout(400)
@@ -211,17 +222,11 @@ def check_resize_race(p):
 
     final = read_scale(pg)
     sends = pg.evaluate("() => window.__lgSends")
-    drops = sum(1 for s, r in sends if s == "S2" and r is False)   # shell's S2 refused (slot busy)
+    drops = sum(1 for s, r in sends if s == "S2" and r is False)   # shell's S2 refused (ring full)
     if want != 2:
         fails.append(f"race: shell did not request scale 2 (__lgScale={want})")
-    # drops == 0 used to mean "setup failed, we learned nothing". Since
-    # nooga/let-go#595 (SPSC ring + held-key coalesce for SAB key input) it is
-    # instead the EXPECTED result: the producer never refuses a send, so the
-    # 1-slot-busy drop this provokes cannot happen on a build carrying that
-    # change. Convergence below still asserts the end-to-end behaviour the
-    # regression is about; only the retry path goes unexercised. Report that
-    # rather than failing, which would make every future run red.
-    inconclusive = drops == 0
+    if drops == 0:
+        fails.append(f"race: did not reproduce a dropped S2 send (sends={sends}); test inconclusive")
     if not converged:
         fails.append(f"race: rendered scale {final} never matched __lgScale {want} "
                      f"within {RACE_TIMEOUT // 1000}s (drops={drops}, sends={sends})")
@@ -232,13 +237,8 @@ def check_resize_race(p):
     for f in fails:
         print("FAIL", f)
     if not fails:
-        if inconclusive:
-            print(f"PASS race: rendered scale converged {start}→{final} == __lgScale {want} "
-                  f"(no S2 drop to recover from — expected on let-go with the #595 SPSC "
-                  f"ring; the retry path itself went unexercised)")
-        else:
-            print(f"PASS race: {drops} dropped S2 send(s) recovered — rendered scale "
-                  f"converged {start}→{final} == __lgScale {want}")
+        print(f"PASS race: {drops} dropped S2 send(s) recovered after {filled} filler keys — "
+              f"rendered scale converged {start}→{final} == __lgScale {want}")
     return not fails
 
 
