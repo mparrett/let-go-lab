@@ -1,0 +1,71 @@
+--- a/microgpt.py
++++ b/microgpt_tape.py
+@@ -1,4 +1,9 @@
+ """
++microgpt_tape.py: microgpt.py with an optional tape (Wengert list) backward,
++for timing the topo-sort DFS against recording nodes as they are created.
++MICROGPT_TAPE=1 selects the tape; num_steps comes from argv[1] (default 1000).
++Everything else is the reference file unchanged.
++
+ The most atomic way to train and run inference for a GPT in pure, dependency-free Python.
+ This file is the complete algorithm.
+ Everything else is just efficiency.
+@@ -9,6 +14,9 @@
+ import os       # os.path.exists
+ import math     # math.log, math.exp
+ import random   # random.seed, random.choices, random.gauss, random.shuffle
++import sys, time
++USE_TAPE = os.environ.get("MICROGPT_TAPE") == "1"
++TAPE = []  # non-leaf Values in creation order, which is a topological order
+ random.seed(42) # Let there be order among chaos
+ 
+ # Let there be a Dataset `docs`: list[str] of documents (e.g. a list of names)
+@@ -35,6 +43,8 @@
+         self.grad = 0                   # derivative of the loss w.r.t. this node, calculated in backward pass
+         self._children = children       # children of this node in the computation graph
+         self._local_grads = local_grads # local derivative of this node w.r.t. its children
++        if USE_TAPE and children:
++            TAPE.append(self)
+ 
+     def __add__(self, other):
+         other = other if isinstance(other, Value) else Value(other)
+@@ -57,6 +67,14 @@
+     def __rtruediv__(self, other): return other * self**-1
+ 
+     def backward(self):
++        if USE_TAPE:
++            # Children are created before their parents, so reverse creation
++            # order is a valid reverse topological order: no DFS needed.
++            self.grad = 1
++            for v in reversed(TAPE):
++                for child, local_grad in zip(v._children, v._local_grads):
++                    child.grad += local_grad * v.grad
++            return
+         topo = []
+         visited = set()
+         def build_topo(v):
+@@ -149,8 +167,10 @@
+ v = [0.0] * len(params) # second moment buffer
+ 
+ # Repeat in sequence
+-num_steps = 1000 # number of training steps
++num_steps = int(sys.argv[1]) if len(sys.argv) > 1 else 1000 # number of training steps
++t0 = time.time()
+ for step in range(num_steps):
++    TAPE.clear()
+ 
+     # Take single document, tokenize it, surround it with BOS special token on both sides
+     doc = docs[step % len(docs)]
+@@ -181,8 +201,11 @@
+         p.data -= lr_t * m_hat / (v_hat ** 0.5 + eps_adam)
+         p.grad = 0
+ 
+-    print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.4f}", end='\r')
++    print(f"step {step+1:4d} / {num_steps:4d} | loss {loss.data:.10f}")
+ 
++print(f"train time: {time.time()-t0:.1f}s")
++TAPE.clear()
++USE_TAPE = False  # inference never calls backward
+ # Inference: may the model babble back to us
+ temperature = 0.5 # in (0, 1], control the "creativity" of generated text, low to high
+ print("\n--- inference (new, hallucinated names) ---")

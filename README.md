@@ -36,3 +36,11 @@ and how to add a demo.
   The same `.lg` runs natively in any sixel-capable terminal (`just play`):
 
   ![Mandelbrot demo zoomed in, running natively in iTerm2](docs/img/mandelbrot-native-zoom.png)
+
+## Experiments
+
+- **[aot](experiments/aot)** — the mandelbrot kernel lowered to native Go through
+  `lg compile`, against the VM and a hand-written Go port.
+- **[microgpt](experiments/microgpt)** — a port of karpathy's microgpt (a GPT
+  trainer on scalar autograd), on the VM and as a native binary, timed against
+  CPython.

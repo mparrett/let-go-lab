@@ -1,0 +1,260 @@
+;; microgpt.lg: a let-go port of karpathy's microgpt.py,
+;; https://gist.github.com/karpathy/8627fe009c40f57531cb18360106ce95
+;; rev 14fb038816c7aae0bb9342c2dbf1a51dd134a5ff (fetch-reference.sh fetches it).
+;; Same model, same graph, node for node; backward walks a tape instead of
+;; Python's topo-sort DFS (see backward!). Comments mark where let-go differs
+;; from the Python. The RNG differs, so document order and init differ
+;; too: compare speed per token (printed at the end), not per step.
+;;
+;;   lg microgpt.lg [num-steps]      ; run in this dir after fetch-reference.sh
+
+(ns microgpt
+  (:require [math]
+            [string :as str]
+            [io]))
+
+(set-rand-seed! 42) ; let-go's RNG is not Mersenne Twister: same spirit, different draws
+
+;; --- Dataset ---------------------------------------------------------------
+(def docs (->> (str/split (slurp "input.txt") #"\n")
+               (map str/trim)
+               (remove str/blank?)
+               shuffle
+               vec))
+(println (str "num docs: " (count docs)))
+
+;; --- Tokenizer -------------------------------------------------------------
+(def uchars (vec (sort (set (apply str docs)))))
+(def char->id (zipmap uchars (range)))
+(def BOS (count uchars))
+(def vocab-size (inc (count uchars)))
+(println (str "vocab size: " vocab-size))
+
+;; --- Autograd --------------------------------------------------------------
+;; No operator overloading, so the dunder methods become v+, v*, ... and plain
+;; numbers get lifted to leaf Values, exactly where Python's __radd__ etc. do.
+;; `m` and `v` are Adam's buffers (Python keeps them in parallel lists).
+;; The mutators are plain fns over set-field!, the native primitive the deftype
+;; macro rewrites (set! field v) into. As protocol methods they ran as bytecode
+;; even in the AOT build (lowered code can't devirtualize a call on a node of
+;; unknown type); as fns, lowered code calls set-field! directly.
+(deftype Value [^:mutable data ^:mutable grad children lgrads
+                ^:mutable m ^:mutable v])
+
+(defn add-grad! [n g] (set-field! n 'grad (+ (.grad n) g)))
+
+(defn adam! [n lr b1 b2 bc1 bc2 eps]
+  (let [grad (.grad n)
+        m    (+ (* b1 (.m n)) (* (- 1.0 b1) grad))
+        v    (+ (* b2 (.v n)) (* (- 1.0 b2) (* grad grad)))
+        m-hat (/ m bc1) v-hat (/ v bc2)]
+    (set-field! n 'm m)
+    (set-field! n 'v v)
+    (set-field! n 'data (- (.data n) (/ (* lr m-hat) (+ (math/sqrt v-hat) eps))))
+    (set-field! n 'grad 0.0)))
+
+;; Backward runs over a tape (Wengert list) instead of Python's topo-sort DFS:
+;; node records every non-leaf Value as it is created, and children are created
+;; before their parents, so creation order is already topological. Gradients
+;; accumulate in a different order than Python's, so results match it to
+;; rounding, not bit for bit. The DFS version is in README.md.
+(def tape (volatile! (transient [])))
+
+(defn node [data children lgrads]
+  (let [n (->Value data 0.0 children lgrads 0.0 0.0)]
+    (when (pos? (count children))
+      (vreset! tape (conj! @tape n)))
+    n))
+(defn lift [x] (if (number? x) (node (double x) [] []) x))
+
+(defn v+ [a b] (let [a (lift a) b (lift b)]
+                 (node (+ (.data a) (.data b)) [a b] [1.0 1.0])))
+(defn v* [a b] (let [a (lift a) b (lift b)]
+                 (node (* (.data a) (.data b)) [a b] [(.data b) (.data a)])))
+;; ^double k: inference typed k int64 (from vdiv's -1), so rmsnorm's -0.5
+;; failed the call guard and ran vpow as bytecode through its var. Callers pass
+;; float exponents; (* -1.0 x) and (math/pow d -2.0) equal their int forms.
+(defn vpow [a ^double k] (let [d (.data a)]
+                   (node (math/pow d k) [a] [(* k (math/pow d (- k 1)))])))
+(defn vlog [a] (let [d (.data a)] (node (math/log d) [a] [(/ 1.0 d)])))
+(defn vexp [a] (let [e (math/exp (.data a))] (node e [a] [e])))
+(defn vrelu [a] (let [d (.data a)]
+                  (node (max 0.0 d) [a] [(if (pos? d) 1.0 0.0)])))
+(defn vneg [a] (v* a -1))
+(defn vdiv [a b] (v* a (if (number? b) (math/pow b -1) (vpow b -1.0))))
+;; Python's sum() starts from int 0, which lifts to a leaf; keep that node.
+(defn vsum [xs] (reduce v+ 0 xs))
+(defn backward! [root]
+  (let [t (persistent! @tape)]
+    (vreset! tape (transient []))
+    (add-grad! root 1.0)
+    (loop [i (dec (count t))]
+      (when (>= i 0)
+        (let [n (nth t i) g (.grad n)
+              cs (.children n) ls (.lgrads n)
+              k (count cs)]
+          (loop [j 0]
+            (when (< j k)
+              (add-grad! (nth cs j) (* (nth ls j) g))
+              (recur (inc j)))))
+        (recur (dec i))))))
+
+;; --- Parameters ------------------------------------------------------------
+(def n-layer 1)
+(def n-embd 16)
+(def block-size 16)
+(def n-head 4)
+(def head-dim (quot n-embd n-head))
+
+;; random.gauss has no let-go counterpart: Box-Muller over rand.
+(defn gauss [^double mu ^double sigma]
+  (let [u1 (- 1.0 (rand)) u2 (rand)]
+    (+ mu (* sigma (math/sqrt (* -2.0 (math/log u1))) (math/cos (* 2.0 math/PI u2))))))
+
+(defn matrix
+  ([nout nin] (matrix nout nin 0.08))
+  ([nout nin std] (vec (repeatedly nout (fn [] (vec (repeatedly nin #(node (gauss 0.0 std) [] []))))))))
+
+;; Python's dict keeps insertion order; a let-go map doesn't past eight entries
+;; (an array map is promoted to a hash map). The ordered [name matrix] vector
+;; is the source of truth for the params flatten and for init order; the map is
+;; only for lookup.
+(def state-entries
+  (vec (concat [["wte" (matrix vocab-size n-embd)]
+                ["wpe" (matrix block-size n-embd)]
+                ["lm_head" (matrix vocab-size n-embd)]]
+               (for [i (range n-layer)
+                     [k o n] [["attn_wq" n-embd n-embd] ["attn_wk" n-embd n-embd]
+                              ["attn_wv" n-embd n-embd] ["attn_wo" n-embd n-embd]
+                              ["mlp_fc1" (* 4 n-embd) n-embd] ["mlp_fc2" n-embd (* 4 n-embd)]]]
+                 [(str "layer" i "." k) (matrix o n)]))))
+(def state-dict (into {} state-entries))
+(def params (vec (for [[_ mat] state-entries row mat p row] p)))
+(println (str "num params: " (count params)))
+
+(defn W [li k] (get state-dict (str "layer" li "." k)))
+
+;; --- Model -----------------------------------------------------------------
+(defn linear [x w] (mapv (fn [wo] (vsum (map v* wo x))) w))
+
+(defn softmax [logits]
+  (let [mx (apply max (map #(.data %) logits))
+        ;; Python's val - max_val, which Value.__sub__ makes val + (-max_val).
+        exps (mapv #(vexp (v+ % (- mx))) logits)
+        total (vsum exps)]
+    (mapv #(vdiv % total) exps)))
+
+(defn rmsnorm [x]
+  (let [ms (vdiv (vsum (map #(v* % %) x)) (count x))
+        scale (vpow (v+ ms 1e-5) -0.5)]
+    (mapv #(v* % scale) x)))
+
+(defn slice [xs from to] (subvec xs from to))
+
+;; Python mutates the keys/values caches in place; here gpt returns the grown
+;; caches alongside the logits.
+(defn gpt [token-id pos-id keys values]
+  (let [tok-emb (get-in state-dict ["wte" token-id])
+        pos-emb (get-in state-dict ["wpe" pos-id])
+        x (rmsnorm (mapv v+ tok-emb pos-emb))]
+    (loop [li 0 x x keys keys values values]
+      (if (< li n-layer)
+        (let [;; 1) Multi-head attention block
+              x-res x
+              x (rmsnorm x)
+              q (linear x (W li "attn_wq"))
+              k (linear x (W li "attn_wk"))
+              v (linear x (W li "attn_wv"))
+              keys (update keys li conj k)
+              values (update values li conj v)
+              ks (nth keys li) vs (nth values li)
+              x-attn (vec (mapcat
+                           (fn [h]
+                             (let [hs (* h head-dim) he (+ hs head-dim)
+                                   q-h (slice q hs he)
+                                   k-h (mapv #(slice % hs he) ks)
+                                   v-h (mapv #(slice % hs he) vs)
+                                   logits (mapv (fn [kt] (vdiv (vsum (map v* q-h kt))
+                                                               (math/pow head-dim 0.5)))
+                                                k-h)
+                                   w (softmax logits)]
+                               (for [j (range head-dim)]
+                                 (vsum (map (fn [wt vt] (v* wt (nth vt j))) w v-h)))))
+                           (range n-head)))
+              x (linear x-attn (W li "attn_wo"))
+              x (mapv v+ x x-res)
+              ;; 2) MLP block
+              x-res x
+              x (rmsnorm x)
+              x (mapv vrelu (linear x (W li "mlp_fc1")))
+              x (linear x (W li "mlp_fc2"))
+              x (mapv v+ x x-res)]
+          (recur (inc li) x keys values))
+        [(linear x (get state-dict "lm_head")) keys values]))))
+
+(def empty-cache (vec (repeat n-layer [])))
+
+;; --- Training (Adam) -------------------------------------------------------
+(def learning-rate 0.01)
+(def beta1 0.85)
+(def beta2 0.99)
+(def eps-adam 1e-8)
+
+(defn train! [num-steps]
+  (let [t0 (System/currentTimeMillis)
+        n-tokens (volatile! 0)] ; positions forwarded, the per-step workload
+    (dotimes [step num-steps]
+      (let [doc (nth docs (mod step (count docs)))
+            tokens (vec (concat [BOS] (map char->id doc) [BOS]))
+            n (min block-size (dec (count tokens)))
+            _ (vswap! n-tokens + n)
+            losses (loop [pos 0 keys empty-cache values empty-cache acc []]
+                     (if (< pos n)
+                       (let [[logits keys values] (gpt (nth tokens pos) pos keys values)
+                             probs (softmax logits)]
+                         (recur (inc pos) keys values
+                                (conj acc (vneg (vlog (nth probs (nth tokens (inc pos))))))))
+                       acc))
+            loss (v* (vsum losses) (/ 1.0 n))]
+        (backward! loss)
+        (let [lr-t (* learning-rate (- 1.0 (/ (double step) num-steps)))
+              bc1 (- 1.0 (math/pow beta1 (inc step)))
+              bc2 (- 1.0 (math/pow beta2 (inc step)))]
+          (doseq [p params] (adam! p lr-t beta1 beta2 bc1 bc2 eps-adam)))
+        (print (format "step %4d / %4d | loss %.4f\r" (inc step) num-steps (.data loss)))
+        (io/flush *out*)))
+    (let [ms (- (System/currentTimeMillis) t0)]
+      (println (format "\ntrain time: %.1fs | %d tokens | %.2f ms/token"
+                       (/ ms 1000.0) @n-tokens (/ (double ms) @n-tokens))))))
+
+;; --- Inference -------------------------------------------------------------
+;; random.choices with weights: walk the cumulative sum.
+(defn choose [weights]
+  (let [r (* (rand) (reduce + weights))]
+    (loop [i 0 acc 0.0]
+      (let [acc (+ acc (nth weights i))]
+        (if (or (< r acc) (= i (dec (count weights)))) i (recur (inc i) acc))))))
+
+(def temperature 0.5)
+
+(defn sample! []
+  (println "--- inference (new, hallucinated names) ---")
+  (dotimes [s 20]
+    (vreset! tape (transient [])) ; sampling never calls backward
+    (let [sample (loop [pos 0 tok BOS keys empty-cache values empty-cache out []]
+                   (if (< pos block-size)
+                     (let [[logits keys values] (gpt tok pos keys values)
+                           probs (softmax (mapv #(vdiv % temperature) logits))
+                           tok (choose (mapv #(.data %) probs))]
+                       (if (== tok BOS) out (recur (inc pos) tok keys values (conj out (nth uchars tok)))))
+                     out))]
+      (println (format "sample %2d: %s" (inc s) (apply str sample))))))
+
+;; An entry point so `lg compile` can build a native binary; it drops the
+;; top-level (-main) call below, which `lg microgpt.lg` still runs.
+(defn -main [& args]
+  (let [a (or (first args) (first *command-line-args*))]
+    (train! (if a (parse-long (str a)) 1000))
+    (sample!)))
+
+(-main)
