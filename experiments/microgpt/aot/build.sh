@@ -30,7 +30,8 @@ case "$out" in
 esac
 gen=$here/gen
 rm -rf "$gen"
-LETGO_SRC=$LETGO_SRC "$LG" compile -work "$gen" -o "$out" "$here/../microgpt.lg"
+# Top-level slurp reads input.txt while compiling, regardless of the caller's cwd.
+(cd "$here/.." && LETGO_SRC=$LETGO_SRC "$LG" compile -work "$gen" -o "$out" microgpt.lg)
 if [ "${PROFILE:-0}" = 1 ]; then
   # Profiling hook (LG_CPUPROFILE / LG_MEMPROFILE); see profile_hook.go.
   cp "$here/profile_hook.go" "$gen/"

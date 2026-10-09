@@ -11,7 +11,7 @@ on:
   pull_request:
 
 env:
-  # Pinned let-go RELEASE (nooga/let-go). The lab never builds lg itself; it runs
+  # Pinned let-go RELEASE (nooga/let-go) for browser smoke tests. It runs
   # a stock upstream build. Pinning a tag keeps CI reproducible; the full clone
   # below fetches tags, so `git checkout` resolves it. To bump: pick a newer tag,
   # build + run `scripts/ci.sh` against it locally, then update this value AND
@@ -66,3 +66,32 @@ jobs:
 
       - name: Smoke suite
         run: scripts/ci.sh
+
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The optional native compiler has its own full-SHA pin. Pages and the
+      # browser smoke job continue to use the release pin above.
+      - name: Build native demos (SHA-pinned upstream)
+        run: |
+          scripts/build-native.sh mandelbrot
+          scripts/build-native.sh pathtrace
+          scripts/build-native.sh microgpt
+
+      - name: Compare native demos with the VM
+        run: |
+          PIN=$(cat config/let-go-native.sha)
+          python3 test/native_demo_test.py --lg ".cache/let-go-native/$PIN/bin/lg"
+          python3 -I experiments/microgpt/verify.py --lg "$PWD/.cache/let-go-native/$PIN/bin/lg"
+          LG="$PWD/dist/native/mandelbrot" python3 test/eof_exit_test.py

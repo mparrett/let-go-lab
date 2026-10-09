@@ -107,7 +107,9 @@
                (str acc "#" n ";2;" (iq t 0.0) ";" (iq t 0.33) ";" (iq t 0.67)))))))
 
 ;; --- Escape-time iteration: returns iters (0..mi), mi = interior.
-(defn escape [cx cy mi]
+;; Hint the coordinates here and in compute-grid: both call boundaries must
+;; accept doubles for the full native build to avoid the VM fallback (#551).
+(defn escape [^double cx ^double cy mi]
   (loop [zx 0.0 zy 0.0 i 0]
     (let [zx2 (* zx zx)
           zy2 (* zy zy)]
@@ -127,7 +129,7 @@
 ;; CW·CH escape() calls. Returns [grid total-iters]; the iter sum (threaded,
 ;; not via an atom, so it doesn't distort timing) is the VM-throughput
 ;; numerator (iters/sec). `left`/`top`/`cstep` describe the current view.
-(defn compute-grid [cx cy vw mi]
+(defn compute-grid [^double cx ^double cy vw mi]
   (let [cstep (/ vw (float CW))
         left  (- cx (/ vw 2.0))
         top   (- cy (/ (* cstep (float CH)) 2.0))]
