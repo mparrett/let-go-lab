@@ -59,7 +59,7 @@
 ;; node records every non-leaf Value as it is created, and children are created
 ;; before their parents, so creation order is already topological. Gradients
 ;; accumulate in a different order than Python's, so results match it to
-;; rounding, not bit for bit. The DFS version is in README.md.
+;; rounding, not bit for bit. The DFS version is in NOTES.md.
 (def tape (volatile! (transient [])))
 
 (defn node [data children lgrads]
@@ -73,7 +73,7 @@
 ;; records nothing. sample! runs gpt over the weights as plain doubles, so
 ;; inference builds no graph (it never calls backward), and the same operations
 ;; in the same order give the same doubles. The check costs the native build
-;; ~20% in training; README "Workarounds" has the macro that would avoid it.
+;; ~20% in an earlier training measurement; NOTES.md has the macro alternative.
 (defn data [x] (if (number? x) x (.data x)))
 (defn v+ [a b] (if (and (number? a) (number? b)) (+ a b)
                  (let [a (lift a) b (lift b)]

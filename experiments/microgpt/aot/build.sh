@@ -23,6 +23,11 @@ LG=${LG:-$(lg_path "$LETGO")}
 LETGO_SRC=${LETGO_SRC:-$LETGO}
 [ -x "$LG" ] || { echo "no lg at $LG (set LETGO or LG)" >&2; exit 1; }
 out=${1:-$here/microgpt-native}
+# Both builds must write to the same file, even after the profiling build cd.
+case "$out" in
+  /*) ;;
+  *) out=$PWD/$out ;;
+esac
 gen=$here/gen
 rm -rf "$gen"
 LETGO_SRC=$LETGO_SRC "$LG" compile -work "$gen" -o "$out" "$here/../microgpt.lg"

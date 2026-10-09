@@ -41,6 +41,6 @@ and how to add a demo.
 
 - **[aot](experiments/aot)** — the mandelbrot kernel lowered to native Go through
   `lg compile`, against the VM and a hand-written Go port.
-- **[microgpt](experiments/microgpt)** — a port of karpathy's microgpt (a GPT
-  trainer on scalar autograd), on the VM and as a native binary, timed against
-  CPython.
+- **[microgpt](experiments/microgpt)** — Karpathy's scalar GPT in one let-go
+  file: train on the VM or natively, sample in the browser, and check numerical
+  agreement with Python. Includes trained weights and reproducible timings.
