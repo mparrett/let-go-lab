@@ -78,7 +78,8 @@ cert it falls back to localhost HTTP.
 
 ## Deploy (GitHub Pages)
 
-`.github/workflows/pages.yml` builds the mandelbrot demo and publishes it to
+`.github/workflows/pages.yml` builds mandelbrot at the root and the pretrained
+microgpt sampler at `/microgpt/`, and publishes them to
 https://mparrett.github.io/let-go-lab/ on push to `main`. `scripts/build-pages.sh`
 assembles `_site/` (offline single-file bundle + `coi-serviceworker.js` +
 `.nojekyll`). Pages can't send COOP/COEP, which the `SharedArrayBuffer` input
@@ -87,6 +88,13 @@ bootstrap (`harness/coi-bootstrap.html`, injected by `inject-coi.sh`) registers
 it and reloads once into the isolated context. Build locally with
 `scripts/build-pages.sh` and serve `_site/` over plain HTTP to exercise the SW
 path (a headered origin like `serve.py` is already isolated, so the SW no-ops).
+
+`scripts/build-microgpt-pages.sh` also builds the sampler alone. Its custom
+shell uses `-w-host-eval` to request eight-name batches from the same loaded
+image. CI's `test/microgpt_pages_test.py` serves it without isolation headers
+under `/let-go-lab/microgpt/` and checks both desktop and mobile. Draft PRs run
+these checks; Pages still deploys only on pushes to `main` or an explicit
+workflow dispatch.
 
 First deploy: enable Pages with Source = GitHub Actions (the workflow's
 `configure-pages` step auto-enables it when the token allows).

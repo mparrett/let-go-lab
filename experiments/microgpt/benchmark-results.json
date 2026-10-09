@@ -1,0 +1,56 @@
+{
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.7",
+  "lg": "lg dev\nlgb: format 2 (default write), 3 (max)\ncapabilities: CapOpcodeSet (0x1, since v1.12.0)\nopcodes: 47 (signature 7cf8f862cf5ba1e5)",
+  "source_sha256": "0c625d935a0c28a2af2b1934378c87bc765f9257740e764c7aabf8b19ef4e772",
+  "steps": 100,
+  "reps": 3,
+  "runs": {
+    "native": [
+      {
+        "tokens": 715,
+        "ms_per_token": 14.18
+      },
+      {
+        "tokens": 715,
+        "ms_per_token": 13.49
+      },
+      {
+        "tokens": 715,
+        "ms_per_token": 13.42
+      }
+    ],
+    "vm": [
+      {
+        "tokens": 715,
+        "ms_per_token": 16.39
+      },
+      {
+        "tokens": 715,
+        "ms_per_token": 15.86
+      },
+      {
+        "tokens": 715,
+        "ms_per_token": 16.3
+      }
+    ],
+    "python-tape": [
+      {
+        "tokens": 744,
+        "ms_per_token": 7.064965053763441
+      },
+      {
+        "tokens": 744,
+        "ms_per_token": 7.003623655913979
+      },
+      {
+        "tokens": 744,
+        "ms_per_token": 7.143663978494624
+      }
+    ]
+  },
+  "cpu": "Apple M2",
+  "source_revision": "b1b156ec337d38b5da987c7ea5a2931eb994e62b",
+  "let_go_revision": "bb3606367da36d59efb0803e06bf6ac957150dd2",
+  "notes": "Short local runs on a machine in normal use, taken at source_revision. Later changes to comments and the sampling interface do not change training operations."
+}

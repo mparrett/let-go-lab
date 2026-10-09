@@ -1,0 +1,10 @@
+# Fetched by fetch-reference.sh (not vendored: the gist carries no license).
+input.txt
+microgpt.py
+microgpt_tape.py
+# aot/build.sh output.
+aot/gen/
+aot/microgpt-native
+# wasm/build.sh output.
+wasm/gen/
+wasm/out/
