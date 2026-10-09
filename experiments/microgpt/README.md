@@ -87,6 +87,8 @@ Clojure.
 | `vpow` takes `^double k`; `vdiv` passes `-1.0` | float params inferred `int64` without a hint | nooga/let-go#551 |
 | `aot/patch562.py`, `aot/unbox562.go` | `math/*` results don't build into float slots | nooga/let-go#1044 merges (#562) |
 | `aot/profile_hook.go` | `lg compile` binaries have no profiling flags | a let-go feature |
+| every op checks `number?` so sampling can run on plain doubles; native training pays ~20% | `lg compile` doesn't see a `defn` that isn't a literal top-level form, so the `defn-twins` macro below doesn't build | `lg compile` sees macro-emitted defs (issue to be filed) |
+| `weights.txt` is one number per line, not EDN | `lg compile` binaries link no reader | nooga/let-go#992 |
 
 Not workarounds: the `-main` entry (`lg compile` needs one), Box-Muller `gauss`
 and the weighted `choose` (Python's stdlib has them; let-go doesn't), the ordered
@@ -102,8 +104,9 @@ compiled to wasm. It comes in two modes:
 - `wasm/build.sh --weights weights.txt` bakes in weights trained elsewhere,
   and the page only samples. With weights from a native 1000-step run
   (loss 2.6057), the TinyGo page prints the same 20 names as the native binary
-  ("kirli", "keson", "amayan", "jaden", ...), about 20 s after load in headless
-  Chromium.
+  ("kirli", "keson", "amayan", "jaden", ...), about 9 s after load in headless
+  Chromium. Sampling runs on plain doubles, not through the autograd graph (see
+  "Sampling without the graph" below); through the graph it took about 20 s.
 - `wasm/build.sh [steps]` trains in the page (20 steps by default) and then
   samples. Loss and samples match the VM exactly.
 
@@ -146,6 +149,32 @@ LG_CPUPROFILE=cpu.prof LG_MEMPROFILE=mem.prof aot/microgpt-native 40
 go tool pprof -top aot/microgpt-native cpu.prof
 go tool pprof -top -sample_index=alloc_space aot/microgpt-native mem.prof
 ```
+
+## Sampling without the graph: the macro version, for reference
+
+Sampling never calls `backward!`, so it doesn't need the autograd graph. The
+shipped code makes every op accept plain numbers. This version writes the
+model once and has a macro define a `-plain` twin of each model fn with the
+graph ops swapped for arithmetic, so the training ops stay untouched:
+
+```clojure
+(defmacro defn-twins [ops & defns]
+  (let [names (map second defns)
+        subs (merge ops (zipmap names (map #(symbol (str % "-plain")) names)))]
+    `(do ~@defns ~@(map #(walk/postwalk-replace subs %) defns))))
+
+(defn sum [xs] (reduce + 0 xs))
+(defn div [a b] (* a (math/pow b -1)))
+(defn relu [x] (max 0.0 x))
+
+(defn-twins {v+ +, v* *, vpow math/pow, vexp math/exp, vrelu relu, vdiv div, vsum sum,
+             .data identity}
+  (defn linear ...) (defn softmax ...) (defn rmsnorm ...) (defn gpt [sd ...] ...))
+```
+
+On the VM it samples in 0.87 s (1.04 s shipped, 5.7 s through the graph),
+trains at the same speed and prints the same samples. `lg compile` rejects it
+("Can't resolve gpt"): see the workarounds table.
 
 ## The DFS backward (Python's topo sort), for reference
 

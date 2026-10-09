@@ -69,19 +69,31 @@
     n))
 (defn lift [x] (if (number? x) (node (double x) [] []) x))
 
-(defn v+ [a b] (let [a (lift a) b (lift b)]
-                 (node (+ (.data a) (.data b)) [a b] [1.0 1.0])))
-(defn v* [a b] (let [a (lift a) b (lift b)]
-                 (node (* (.data a) (.data b)) [a b] [(.data b) (.data a)])))
+;; Every op also takes plain numbers: given no node, it returns a number and
+;; records nothing. sample! runs gpt over the weights as plain doubles, so
+;; inference builds no graph (it never calls backward), and the same operations
+;; in the same order give the same doubles. The check costs the native build
+;; ~20% in training; README "Workarounds" has the macro that would avoid it.
+(defn data [x] (if (number? x) x (.data x)))
+(defn v+ [a b] (if (and (number? a) (number? b)) (+ a b)
+                 (let [a (lift a) b (lift b)]
+                   (node (+ (.data a) (.data b)) [a b] [1.0 1.0]))))
+(defn v* [a b] (if (and (number? a) (number? b)) (* a b)
+                 (let [a (lift a) b (lift b)]
+                   (node (* (.data a) (.data b)) [a b] [(.data b) (.data a)]))))
 ;; ^double k: inference typed k int64 (from vdiv's -1), so rmsnorm's -0.5
 ;; failed the call guard and ran vpow as bytecode through its var. Callers pass
 ;; float exponents; (* -1.0 x) and (math/pow d -2.0) equal their int forms.
-(defn vpow [a ^double k] (let [d (.data a)]
-                   (node (math/pow d k) [a] [(* k (math/pow d (- k 1)))])))
-(defn vlog [a] (let [d (.data a)] (node (math/log d) [a] [(/ 1.0 d)])))
-(defn vexp [a] (let [e (math/exp (.data a))] (node e [a] [e])))
-(defn vrelu [a] (let [d (.data a)]
-                  (node (max 0.0 d) [a] [(if (pos? d) 1.0 0.0)])))
+(defn vpow [a ^double k] (if (number? a) (math/pow a k)
+                           (let [d (.data a)]
+                             (node (math/pow d k) [a] [(* k (math/pow d (- k 1)))]))))
+(defn vlog [a] (if (number? a) (math/log a)
+                 (let [d (.data a)] (node (math/log d) [a] [(/ 1.0 d)]))))
+(defn vexp [a] (if (number? a) (math/exp a)
+                 (let [e (math/exp (.data a))] (node e [a] [e]))))
+(defn vrelu [a] (if (number? a) (max 0.0 a)
+                  (let [d (.data a)]
+                    (node (max 0.0 d) [a] [(if (pos? d) 1.0 0.0)]))))
 (defn vneg [a] (v* a -1))
 (defn vdiv [a b] (v* a (if (number? b) (math/pow b -1) (vpow b -1.0))))
 ;; Python's sum() starts from int 0, which lifts to a leaf; keep that node.
@@ -134,13 +146,13 @@
 (def params (vec (for [[_ mat] state-entries row mat p row] p)))
 (println (str "num params: " (count params)))
 
-(defn W [li k] (get state-dict (str "layer" li "." k)))
+(defn W [sd li k] (get sd (str "layer" li "." k)))
 
 ;; --- Model -----------------------------------------------------------------
 (defn linear [x w] (mapv (fn [wo] (vsum (map v* wo x))) w))
 
 (defn softmax [logits]
-  (let [mx (apply max (map #(.data %) logits))
+  (let [mx (apply max (map data logits))
         ;; Python's val - max_val, which Value.__sub__ makes val + (-max_val).
         exps (mapv #(vexp (v+ % (- mx))) logits)
         total (vsum exps)]
@@ -155,18 +167,18 @@
 
 ;; Python mutates the keys/values caches in place; here gpt returns the grown
 ;; caches alongside the logits.
-(defn gpt [token-id pos-id keys values]
-  (let [tok-emb (get-in state-dict ["wte" token-id])
-        pos-emb (get-in state-dict ["wpe" pos-id])
+(defn gpt [sd token-id pos-id keys values]
+  (let [tok-emb (get-in sd ["wte" token-id])
+        pos-emb (get-in sd ["wpe" pos-id])
         x (rmsnorm (mapv v+ tok-emb pos-emb))]
     (loop [li 0 x x keys keys values values]
       (if (< li n-layer)
         (let [;; 1) Multi-head attention block
               x-res x
               x (rmsnorm x)
-              q (linear x (W li "attn_wq"))
-              k (linear x (W li "attn_wk"))
-              v (linear x (W li "attn_wv"))
+              q (linear x (W sd li "attn_wq"))
+              k (linear x (W sd li "attn_wk"))
+              v (linear x (W sd li "attn_wv"))
               keys (update keys li conj k)
               values (update values li conj v)
               ks (nth keys li) vs (nth values li)
@@ -183,16 +195,16 @@
                                (for [j (range head-dim)]
                                  (vsum (map (fn [wt vt] (v* wt (nth vt j))) w v-h)))))
                            (range n-head)))
-              x (linear x-attn (W li "attn_wo"))
+              x (linear x-attn (W sd li "attn_wo"))
               x (mapv v+ x x-res)
               ;; 2) MLP block
               x-res x
               x (rmsnorm x)
-              x (mapv vrelu (linear x (W li "mlp_fc1")))
-              x (linear x (W li "mlp_fc2"))
+              x (mapv vrelu (linear x (W sd li "mlp_fc1")))
+              x (linear x (W sd li "mlp_fc2"))
               x (mapv v+ x x-res)]
           (recur (inc li) x keys values))
-        [(linear x (get state-dict "lm_head")) keys values]))))
+        [(linear x (get sd "lm_head")) keys values]))))
 
 (def empty-cache (vec (repeat n-layer [])))
 
@@ -212,7 +224,7 @@
             _ (vswap! n-tokens + n)
             losses (loop [pos 0 keys empty-cache values empty-cache acc []]
                      (if (< pos n)
-                       (let [[logits keys values] (gpt (nth tokens pos) pos keys values)
+                       (let [[logits keys values] (gpt state-dict (nth tokens pos) pos keys values)
                              probs (softmax logits)]
                          (recur (inc pos) keys values
                                 (conj acc (vneg (vlog (nth probs (nth tokens (inc pos))))))))
@@ -255,16 +267,16 @@
 
 (defn sample! []
   (println "--- inference (new, hallucinated names) ---")
-  (dotimes [s 20]
-    (vreset! tape (transient [])) ; sampling never calls backward
-    (let [sample (loop [pos 0 tok BOS keys empty-cache values empty-cache out []]
-                   (if (< pos block-size)
-                     (let [[logits keys values] (gpt tok pos keys values)
-                           probs (softmax (mapv #(vdiv % temperature) logits))
-                           tok (choose (mapv #(.data %) probs))]
-                       (if (== tok BOS) out (recur (inc pos) tok keys values (conj out (nth uchars tok)))))
-                     out))]
-      (println (format "sample %2d: %s" (inc s) (apply str sample))))))
+  (let [sd (update-vals state-dict (fn [mat] (mapv #(mapv data %) mat)))]
+    (dotimes [s 20]
+      (let [sample (loop [pos 0 tok BOS keys empty-cache values empty-cache out []]
+                     (if (< pos block-size)
+                       (let [[logits keys values] (gpt sd tok pos keys values)
+                             probs (softmax (mapv #(vdiv % temperature) logits))
+                             tok (choose probs)]
+                         (if (== tok BOS) out (recur (inc pos) tok keys values (conj out (nth uchars tok)))))
+                       out))]
+        (println (format "sample %2d: %s" (inc s) (apply str sample)))))))
 
 ;; An entry point so `lg compile` and `lg -w` can build it. Both evaluate the
 ;; top-level forms while building, so the call below is guarded; `lg
