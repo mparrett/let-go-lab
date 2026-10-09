@@ -17,7 +17,7 @@ counterpart.
 cd experiments/microgpt
 ./fetch-reference.sh            # input.txt, microgpt.py, microgpt_tape.py (pinned, checksummed)
 lg microgpt.lg 1000             # VM; the argument is the number of training steps
-aot/build.sh                    # native binary via lg compile (needs Go)
+aot/build.sh                    # native binary via lg compile (needs Go, and let-go main at or after bb36063)
 aot/microgpt-native 1000 weights.txt   # train, save the weights (~5 min; a trained copy is committed)
 lg microgpt.lg 0 weights.txt    # load them and only sample (either build reads either's file)
 LETGO_USE_TINYGO=1 wasm/build.sh --weights weights.txt   # browser page that samples from them
@@ -33,7 +33,7 @@ in CPython (`MICROGPT_TAPE=1`), for a like-for-like comparison.
 ## Results
 
 4-vCPU Linux box, CPython 3.12.3, let-go `main` at `ff1e6da` plus the #562 fix
-(nooga/let-go#1044). Compare **ms/token**, not per-step times: the two RNGs
+(nooga/let-go#1044, since merged). Compare **ms/token**, not per-step times: the two RNGs
 shuffle the documents differently. Every comparison was run interleaved, two
 or more reps each.
 
@@ -85,7 +85,6 @@ Clojure.
 | `add-grad!`/`adam!` are fns over `set-field!`, not deftype protocol methods | under AOT a protocol call on a node of unknown type runs the method body as bytecode | protocol dispatch lowers natively |
 | `backward!`'s inner loop is a hand-written `loop`, not `dotimes` | `dotimes` emits `clojure.core/<`/`inc`, which miss the arithmetic intrinsics | nooga/let-go#1045 |
 | `vpow` takes `^double k`; `vdiv` passes `-1.0` | float params inferred `int64` without a hint | nooga/let-go#551 |
-| `aot/patch562.py`, `aot/unbox562.go` | `math/*` results don't build into float slots | nooga/let-go#1044 merges (#562) |
 | `aot/profile_hook.go` | `lg compile` binaries have no profiling flags | a let-go feature |
 | every op checks `number?` so sampling can run on plain doubles; native training pays ~20% | `lg compile` doesn't see a `defn` that isn't a literal top-level form, so the `defn-twins` macro below doesn't build | nooga/let-go#1049 |
 | `weights.txt` is one number per line, not EDN | `lg compile` binaries link no reader | nooga/let-go#992 |
