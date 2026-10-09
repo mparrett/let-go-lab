@@ -19,6 +19,8 @@ cd experiments/microgpt
 lg microgpt.lg 1000             # VM; the argument is the number of training steps
 aot/build.sh                    # native binary via lg compile (needs Go)
 aot/microgpt-native 1000
+wasm/build.sh 20                # browser page via lg -w; serve it with the line below
+python3 ../../scripts/serve.py --dir wasm/out --headers ../../harness/serve.json
 python3 -I microgpt.py          # the reference, 1000 steps
 python3 -I count_tokens.py 1000 # its token count, for ms/token
 ```
@@ -90,6 +92,20 @@ and the weighted `choose` (Python's stdlib has them; let-go doesn't), the ordere
 `state-entries` (a Clojure map loses order past 8 entries too), and the
 `string`/`io` namespace names. Avoid a local named `args` in `-main`
 (nooga/let-go#1046).
+
+## In the browser
+
+`wasm/build.sh [steps]` builds a page with `lg -w`, which runs the bytecode VM
+compiled to wasm. Training matches the VM exactly: same loss, same samples.
+In headless Chromium it is about 7× slower, at 621 ms/token against 86 for
+`lg microgpt.lg` on the same lg (20 steps). The `lg compile` gains don't carry
+over, because `-w` doesn't use the lowered Go.
+
+The page needs cross-origin isolation (COOP/COEP), which `scripts/serve.py`
+sets from `harness/serve.json`. `lg -w` embeds no resources, and the browser
+passes no arguments. So the script writes a copy of `microgpt.lg` to
+`wasm/gen/` with `input.txt` inlined as a string and the default step count
+replaced (20 by default, about 90 s of training). The page is 8.5 MB.
 
 ## Profiling the native binary
 

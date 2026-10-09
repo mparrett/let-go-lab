@@ -250,11 +250,12 @@
                      out))]
       (println (format "sample %2d: %s" (inc s) (apply str sample))))))
 
-;; An entry point so `lg compile` can build a native binary; it drops the
-;; top-level (-main) call below, which `lg microgpt.lg` still runs.
+;; An entry point so `lg compile` and `lg -w` can build it. Both evaluate the
+;; top-level forms while building, so the call below is guarded; `lg
+;; microgpt.lg` still runs it.
 (defn -main [& args]
   (let [a (or (first args) (first *command-line-args*))]
     (train! (if a (parse-long (str a)) 1000))
     (sample!)))
 
-(-main)
+(when-not *compiling-aot* (-main))
