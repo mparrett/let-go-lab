@@ -87,7 +87,7 @@ Clojure.
 | `vpow` takes `^double k`; `vdiv` passes `-1.0` | float params inferred `int64` without a hint | nooga/let-go#551 |
 | `aot/patch562.py`, `aot/unbox562.go` | `math/*` results don't build into float slots | nooga/let-go#1044 merges (#562) |
 | `aot/profile_hook.go` | `lg compile` binaries have no profiling flags | a let-go feature |
-| every op checks `number?` so sampling can run on plain doubles; native training pays ~20% | `lg compile` doesn't see a `defn` that isn't a literal top-level form, so the `defn-twins` macro below doesn't build | `lg compile` sees macro-emitted defs (issue to be filed) |
+| every op checks `number?` so sampling can run on plain doubles; native training pays ~20% | `lg compile` doesn't see a `defn` that isn't a literal top-level form, so the `defn-twins` macro below doesn't build | nooga/let-go#1049 |
 | `weights.txt` is one number per line, not EDN | `lg compile` binaries link no reader | nooga/let-go#992 |
 
 Not workarounds: the `-main` entry (`lg compile` needs one), Box-Muller `gauss`
