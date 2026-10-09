@@ -10,12 +10,15 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 cd "$here"
 
+# sha256sum on Linux, shasum on macOS.
+if command -v sha256sum >/dev/null; then sha256() { sha256sum "$@"; }; else sha256() { shasum -a 256 "$@"; }; fi
+
 fetch() { # url out sha256
   if [ ! -f "$2" ]; then
     curl -fsSL "$1" -o "$2.tmp"
     mv "$2.tmp" "$2"
   fi
-  echo "$3  $2" | sha256sum -c --quiet - || { echo "checksum mismatch: $2" >&2; exit 1; }
+  echo "$3  $2" | sha256 -c --quiet - >/dev/null || { echo "checksum mismatch: $2" >&2; exit 1; }
 }
 
 fetch https://raw.githubusercontent.com/karpathy/makemore/988aa59/names.txt \
