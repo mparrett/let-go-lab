@@ -47,6 +47,11 @@ Native builds need Go and a let-go checkout at or after `bb36063`
 each other's weights. The file stores parameter values in model order;
 its vocabulary comes from `input.txt`, so use the dataset it was trained on.
 
+From the lab root, `just native microgpt` fetches the reference and builds
+`dist/native/microgpt` with the separate, audited SHA pin. Run that executable
+from this directory so it can read `input.txt` and `weights.txt`. The pin and
+native parity checks are described in [native builds](../../docs/native-builds.md).
+
 To sample in the browser:
 
 ```sh

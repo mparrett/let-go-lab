@@ -19,6 +19,18 @@ Both default to the `mandelbrot` demo and to the lg in the symlinked checkout
 [CLAUDE.md](CLAUDE.md) for the lg requirement, cert setup for LAN/phone serving,
 and how to add a demo.
 
+To compile a complete demo to a native executable:
+
+```sh
+just native mandelbrot       # also: pathtrace, microgpt
+dist/native/mandelbrot
+```
+
+This optional build caches the audited let-go SHA from
+[`config/let-go-native.sha`](config/let-go-native.sha). Browser CI and Pages
+continue to use v1.13.0. See [native builds](docs/native-builds.md) for requirements,
+measurements, and compiler limitations.
+
 ## Demos
 
 - **mandelbrot** — an escape-time Mandelbrot rendered as sixel graphics in

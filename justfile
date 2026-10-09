@@ -10,6 +10,10 @@ default:
 play demo="mandelbrot":
     LETGO="{{LETGO}}" scripts/play.sh {{demo}}
 
+# compile a full demo using the SHA-pinned native toolchain
+native demo="mandelbrot":
+    scripts/build-native.sh {{demo}}
+
 # build + serve a demo in the browser (HTTPS/LAN if a cert is found, else localhost HTTP)
 serve demo="mandelbrot" *ARGS:
     LETGO="{{LETGO}}" scripts/serve.sh {{demo}} {{ARGS}}

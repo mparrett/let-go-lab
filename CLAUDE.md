@@ -23,9 +23,15 @@ certs/               local TLS certs (gitignored; generate your own — see belo
 
 ## How it gets `lg`
 
-This repo never builds lg — it only runs it. Point it at one of:
+The browser and VM recipes run an existing lg. Point them at one of:
 - `ln -s /path/to/let-go let-go` (the default `LETGO=./let-go`), or
 - `LETGO=/path/to/let-go just serve …` to override per-invocation.
+
+The optional `just native <demo>` recipe builds and caches a separate upstream
+checkout pinned by `config/let-go-native.sha`. It does not change `LETGO` or the
+browser/Pages release pin. Set `LETGO_NATIVE=/path/to/checkout` to reuse a checkout
+of that exact SHA. Native builds and parity tests have a separate CI job; see
+[docs/native-builds.md](docs/native-builds.md) when updating the native pin.
 
 The demos need an lg carrying the client-owned shell (the `-w-shell` flag, #245)
 and SGR mouse input (#313). **let-go ≥ 1.11.0** is the floor — the first tagged
@@ -48,6 +54,7 @@ tested. Note the pin also fixes the Go toolchain: v1.13.0's `go.mod` needs Go
 ## Recipes (`just`)
 
 - `just play [demo]` — native TUI (needs a sixel-capable terminal)
+- `just native [demo]` — compile mandelbrot, pathtrace, or microgpt to `dist/native/`
 - `just serve [demo] [--port N] [--http]` — browser; HTTPS/LAN if a cert is found
 - `just reserve [demo]` — re-inject shell + serve, no WASM rebuild (fast shell loop)
 - `just env` — lg version + which let-go this points at

@@ -1,5 +1,9 @@
 # AOT-compiling the mandelbrot kernel to native Go
 
+For the full sixel demo's current native build, use `just native mandelbrot`.
+[Native builds](../../docs/native-builds.md) records the audited compiler SHA
+and current measurements. This directory retains the earlier kernel experiment.
+
 A spike on let-go's `lg-compile` AOT path (`lower-all-ns-to-go`): how fast the
 mandelbrot demo's hot path gets when its `.lg` is lowered to native Go instead of
 interpreted, and where the lowering stops. Originally cut against let-go 1.11.0;
@@ -24,9 +28,9 @@ Measured 2026-09-04 on let-go tip `bdd8268c` (`v1.12.2-95`), one machine
 | Frame | 266 ms | 79 ms | 3.038 ms | 3.4× | 88× |
 
 AOT figures are the whole demo built through `lg-compile --entry-frame`; frame
-is the sum of its two phases. **The compute column needs `^double` hints** — the
-demo's own unhinted `escape` lowers to `int` params, and the call site's type
-guard then falls back to the VM, so compute stays at 115 ms with no diagnostic
+is the sum of its two phases. **That compute column used `^double` hints** — the
+demo's then-unhinted `escape` lowered to `int` params, and the call site's type
+guard fell back to the VM, so compute stayed at 115 ms with no diagnostic
 ([#551](https://github.com/nooga/let-go/issues/551)).
 
 For pure arithmetic the lowering is near-optimal: the AOT micro-kernel benches
@@ -124,13 +128,16 @@ inferred `cx`/`cy` as `int` and emitted non-compiling `float64 + int` Go — is 
   native encode ~1.4 ms). Those are not reconciled with today's and should not
   be mixed with them: the AOT and native ratios shift materially depending on
   which baseline you pair with which port measurement.
-- Building the full demo through `--entry-frame` currently needs three `math/*`
+- At the time of these measurements, building the full demo through
+  `--entry-frame` needed three `math/*`
   sites hand-unboxed to compile at all
   ([#562](https://github.com/nooga/let-go/issues/562)), and the resulting binary
-  runs `-main` twice — once interpreted, once natively. The AOT column above is
+  ran `-main` twice — once interpreted, once natively. The AOT column above is
   the native pass. The double `-main` run is **fixed** in let-go v1.13.0
   ([#902](https://github.com/nooga/let-go/pull/902)); the #562 hand-unboxing is
-  not, which is why that column is the one below that was not re-measured.
+  now resolved for this demo by [#1044](https://github.com/nooga/let-go/pull/1044)
+  (after v1.13.0). `just native mandelbrot` uses that fix and needs no generated-Go
+  patches. The historical AOT column below has not been re-measured.
 
 - **Re-measured 2026-09-19 on `v1.13.0` (`369e2a6`), same machine (Apple M2).**
   The table above is left at its 2026-09-04 vintage deliberately — the AOT

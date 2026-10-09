@@ -1,0 +1,75 @@
+{
+  "measured": "2026-10-09",
+  "machine": "Apple M2",
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "go": "1.27.1",
+  "let_go_sha": "49858bd247e5277874d3f5bad80c57c756a074d6",
+  "workload": "20 full Mandelbrot home-view frames per run; unhinted and hinted native builds interleaved",
+  "mandelbrot_sha256": "2ac03b95542dbc0a8de0581b8cbe81c82b241708778be2e37713f21e760b2cc6",
+  "runs": {
+    "unhinted": [
+      {
+        "elapsed_seconds": 3.2659626250097062,
+        "frames": 20,
+        "compute_ms_per_frame_median": 104.0,
+        "encode_ms_per_frame_median": 54.0,
+        "iterations_per_frame": 450584,
+        "encoded_bytes_per_frame": 27695
+      },
+      {
+        "elapsed_seconds": 3.2113054170040414,
+        "frames": 20,
+        "compute_ms_per_frame_median": 105.0,
+        "encode_ms_per_frame_median": 53.5,
+        "iterations_per_frame": 450584,
+        "encoded_bytes_per_frame": 27695
+      },
+      {
+        "elapsed_seconds": 3.5044233330118004,
+        "frames": 20,
+        "compute_ms_per_frame_median": 113.5,
+        "encode_ms_per_frame_median": 57.0,
+        "iterations_per_frame": 450584,
+        "encoded_bytes_per_frame": 27695
+      }
+    ],
+    "hinted": [
+      {
+        "elapsed_seconds": 1.2525231249746867,
+        "frames": 20,
+        "compute_ms_per_frame_median": 8.0,
+        "encode_ms_per_frame_median": 52.0,
+        "iterations_per_frame": 450584,
+        "encoded_bytes_per_frame": 27695
+      },
+      {
+        "elapsed_seconds": 1.261847415997181,
+        "frames": 20,
+        "compute_ms_per_frame_median": 8.0,
+        "encode_ms_per_frame_median": 55.0,
+        "iterations_per_frame": 450584,
+        "encoded_bytes_per_frame": 27695
+      },
+      {
+        "elapsed_seconds": 1.4845577090163715,
+        "frames": 20,
+        "compute_ms_per_frame_median": 9.0,
+        "encode_ms_per_frame_median": 60.0,
+        "iterations_per_frame": 450584,
+        "encoded_bytes_per_frame": 27695
+      }
+    ]
+  },
+  "summary": {
+    "unhinted": {
+      "elapsed_seconds_median": 3.2659626250097062,
+      "compute_ms_per_frame_median": 107.0,
+      "encode_ms_per_frame_median": 55.0
+    },
+    "hinted": {
+      "elapsed_seconds_median": 1.261847415997181,
+      "compute_ms_per_frame_median": 8.0,
+      "encode_ms_per_frame_median": 55.0
+    }
+  }
+}
