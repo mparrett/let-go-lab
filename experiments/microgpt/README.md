@@ -18,7 +18,7 @@ cd experiments/microgpt
 ./fetch-reference.sh            # input.txt, microgpt.py, microgpt_tape.py (pinned, checksummed)
 lg microgpt.lg 1000             # VM; the argument is the number of training steps
 aot/build.sh                    # native binary via lg compile (needs Go)
-aot/microgpt-native 1000 weights.txt   # train, save the weights (~5 min)
+aot/microgpt-native 1000 weights.txt   # train, save the weights (~5 min; a trained copy is committed)
 lg microgpt.lg 0 weights.txt    # load them and only sample (either build reads either's file)
 LETGO_USE_TINYGO=1 wasm/build.sh --weights weights.txt   # browser page that samples from them
 python3 ../../scripts/serve.py --dir wasm/out --headers ../../harness/serve.json
@@ -131,6 +131,8 @@ passes no arguments, so the script writes a copy of `microgpt.lg` to
 `wasm/gen/` with `input.txt` inlined as a string and the entry point replaced.
 
 The weights file is the params' data, one number per line, in params order.
+`weights.txt` here is from `aot/microgpt-native 1000 weights.txt` (loss 2.6057;
+`lg microgpt.lg 0 weights.txt` names "anria", "aliia", "kirli", ...).
 It is plain text rather than EDN because a binary from `lg compile` links no
 reader: `read-string` and `edn/read-string` are unbound there, and the call
 only fails when it runs.
