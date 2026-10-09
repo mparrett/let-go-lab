@@ -22,6 +22,9 @@ LETGO=${LETGO:-$lab/let-go}
 LG=${LG:-$(lg_path "$LETGO")}
 LETGO_SRC=${LETGO_SRC:-$LETGO}
 [ -x "$LG" ] || { echo "no lg at $LG (set LETGO or LG)" >&2; exit 1; }
+# Resolve caller-relative overrides before changing into the data directory.
+LG=$(cd "$(dirname "$LG")" && pwd)/$(basename "$LG")
+LETGO_SRC=$(cd "$LETGO_SRC" && pwd -P)
 out=${1:-$here/microgpt-native}
 # Both builds must write to the same file, even after the profiling build cd.
 case "$out" in
