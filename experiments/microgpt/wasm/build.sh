@@ -3,7 +3,7 @@
 # compiled to wasm.
 #
 #   experiments/microgpt/wasm/build.sh [steps]           # train in the page (default 20), then sample
-#   experiments/microgpt/wasm/build.sh --weights FILE    # bake in trained weights; the page only samples
+#   experiments/microgpt/wasm/build.sh --weights FILE    # interactive sampling page with trained weights
 #   python3 scripts/serve.py --dir experiments/microgpt/wasm/out --headers harness/serve.json
 #
 # FILE comes from `lg microgpt.lg 1000 weights.txt` or the native build. With
@@ -47,8 +47,7 @@ if weights:
     [float(w) for w in ws]  # numbers only: they go into the source as a literal
     main = ('(when-not *compiling-aot*\n'
             '  (println "loaded %d trained weights")\n'
-            '  (set-weights! [%s])\n'
-            '  (sample!))' % (len(ws), " ".join(ws)))
+            '  (set-weights! [%s]))' % (len(ws), " ".join(ws)))
 else:
     main = "(when-not *compiling-aot* (train! %s) (sample!))" % steps
 for old, new in [('(slurp "input.txt")', lit),
@@ -57,6 +56,12 @@ for old, new in [('(slurp "input.txt")', lit),
     s = s.replace(old, new)
 open(out, "w").write(s)
 PY
-(cd "$here/gen" && LETGO_SRC=$LETGO_SRC "$LG" -w "$here/out" microgpt.lg)
+if [ -n "$weights" ]; then
+  # Keep the loaded image callable; the shell requests small batches of names.
+  (cd "$here/gen" && LETGO_SRC=$LETGO_SRC "$LG" -w "$here/out" \
+    -w-host-eval -w-shell "$here/shell.html" microgpt.lg)
+else
+  (cd "$here/gen" && LETGO_SRC=$LETGO_SRC "$LG" -w "$here/out" microgpt.lg)
+fi
 if [ -n "$weights" ]; then what="weights from $weights"; else what="$steps training steps"; fi
 echo "built $here/out/index.html ($what)"

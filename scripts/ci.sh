@@ -102,6 +102,22 @@ else
   kill "$serve_pid" 2>/dev/null || true
 fi
 
+group "microgpt Pages (header-free project subpath)"
+if [[ ! -f test/microgpt_pages_test.py || ! -x "$LG" ]]; then
+  absent "microgpt-pages" "test or lg missing"
+else
+  microgpt_site=$(mktemp -d)
+  if scripts/build-microgpt-pages.sh "$microgpt_site"; then
+    python3 test/microgpt_pages_test.py "$microgpt_site"; rc=$?
+    if [[ "$rc" -eq 0 ]]; then echo "PASS: microgpt-pages"
+    elif [[ "$rc" -eq 77 ]]; then absent "microgpt-pages" "playwright not installed"
+    else echo "FAIL: microgpt-pages"; fails=$((fails + 1)); fi
+  else
+    echo "FAIL: microgpt Pages build"; fails=$((fails + 1))
+  fi
+  rm -rf "$microgpt_site"
+fi
+
 echo
 if [[ "$fails" -eq 0 ]]; then
   echo "ci: all checks passed${STRICT:+ (strict)}"

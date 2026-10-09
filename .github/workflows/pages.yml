@@ -1,6 +1,6 @@
 name: pages
 
-# Build the mandelbrot demo and deploy it to GitHub Pages
+# Build the mandelbrot demo and microgpt sampler, then deploy to GitHub Pages
 # (https://mparrett.github.io/let-go-lab/). The bundle is single-file + offline
 # (wasm + xterm inlined), with a COI service worker that re-adds COOP/COEP so the
 # SharedArrayBuffer input ring works on Pages, which can't set those headers.
@@ -45,6 +45,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Build let-go (pinned upstream)
         run: |

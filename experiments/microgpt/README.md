@@ -54,10 +54,36 @@ wasm/build.sh --weights weights.txt
 python3 ../../scripts/serve.py --dir wasm/out --headers ../../harness/serve.json
 ```
 
-Open the server's printed URL. Set `LETGO_USE_TINYGO=1` to build with TinyGo
+Open the server's printed URL. The page loads the committed weights, generates
+eight names, and offers **Generate again**. Each click reuses the loaded model;
+it does not retrain or reload the page. Set `LETGO_USE_TINYGO=1` to build with TinyGo
 when installed. To train in the browser instead,
 use `wasm/build.sh 20`. Browser execution uses the VM compiled to WebAssembly.
 The local server supplies the cross-origin isolation headers the runtime needs.
+
+## GitHub Pages
+
+`scripts/build-pages.sh` assembles Mandelbrot at the site root and this sampler
+at `/microgpt/`. On a push to `main`, the Pages workflow publishes both to
+`https://mparrett.github.io/let-go-lab/`. A draft PR runs the browser checks but
+does not deploy; the sampler URL becomes available after merging:
+
+<https://mparrett.github.io/let-go-lab/microgpt/>
+
+For a local Pages-style preview, from the repository root:
+
+```sh
+scripts/build-microgpt-pages.sh
+python3 -m http.server 8000 --directory _site
+```
+
+Open `http://localhost:8000/microgpt/`. This server deliberately supplies no
+isolation headers, so the bundled service worker handles them as it does on
+Pages. The sampler has no external asset dependencies.
+
+`test/microgpt_pages_test.py` checks a fresh service-worker installation under
+the project subpath, initial names, repeated generation, retry behavior, and
+desktop/mobile layout. It is part of `scripts/ci.sh`.
 
 ## The one algorithm change
 

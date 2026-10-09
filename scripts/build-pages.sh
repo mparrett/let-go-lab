@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# scripts/build-pages.sh — build the mandelbrot demo into a GitHub Pages site dir.
+# scripts/build-pages.sh — build the root demo and microgpt into a Pages site dir.
 #
 # Produces a self-contained, offline, header-less-hostable bundle:
 #   _site/index.html            the demo (wasm + xterm inlined, COI bootstrap in <head>)
 #   _site/coi-serviceworker.js  re-adds COOP/COEP so the page is cross-origin isolated
 #   _site/.nojekyll             tell Pages not to run Jekyll (serve files verbatim)
+#   _site/microgpt/             pretrained sampler + its scoped COI service worker
 #
 # Pages can't set COOP/COEP, which let-go's SharedArrayBuffer input ring needs;
 # the service worker supplies them (see harness/coi-serviceworker.js). The bundle
@@ -52,6 +53,8 @@ mkdir -p "$OUT"
 cp "$BUILD/index.html" "$OUT/index.html"
 cp "$LAB/harness/coi-serviceworker.js" "$OUT/coi-serviceworker.js"
 touch "$OUT/.nojekyll"
+
+LETGO="$LETGO" "$LAB/scripts/build-microgpt-pages.sh" "$OUT/microgpt"
 
 echo "==> Pages site ready in $OUT/"
 for f in .nojekyll index.html coi-serviceworker.js; do

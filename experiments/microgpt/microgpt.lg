@@ -265,18 +265,20 @@
 
 (def temperature 0.5)
 
-(defn sample! []
-  (println "--- inference (new, hallucinated names) ---")
-  (let [sd (update-vals state-dict (fn [mat] (mapv #(mapv data %) mat)))]
-    (dotimes [s 20]
-      (let [sample (loop [pos 0 tok BOS keys empty-cache values empty-cache out []]
-                     (if (< pos block-size)
-                       (let [[logits keys values] (gpt sd tok pos keys values)
-                             probs (softmax (mapv #(vdiv % temperature) logits))
-                             tok (choose probs)]
-                         (if (== tok BOS) out (recur (inc pos) tok keys values (conj out (nth uchars tok)))))
-                       out))]
-        (println (format "sample %2d: %s" (inc s) (apply str sample)))))))
+(defn sample!
+  ([] (sample! 20))
+  ([num-samples]
+    (println "--- inference (new, hallucinated names) ---")
+    (let [sd (update-vals state-dict (fn [mat] (mapv #(mapv data %) mat)))]
+      (dotimes [s num-samples]
+        (let [sample (loop [pos 0 tok BOS keys empty-cache values empty-cache out []]
+                       (if (< pos block-size)
+                         (let [[logits keys values] (gpt sd tok pos keys values)
+                               probs (softmax (mapv #(vdiv % temperature) logits))
+                               tok (choose probs)]
+                           (if (== tok BOS) out (recur (inc pos) tok keys values (conj out (nth uchars tok)))))
+                         out))]
+          (println (format "sample %2d: %s" (inc s) (apply str sample))))))))
 
 ;; An entry point so `lg compile` and `lg -w` can build it. Both evaluate the
 ;; top-level forms while building, so the call below is guarded; `lg

@@ -52,5 +52,5 @@
   "cpu": "Apple M2",
   "source_revision": "b1b156ec337d38b5da987c7ea5a2931eb994e62b",
   "let_go_revision": "bb3606367da36d59efb0803e06bf6ac957150dd2",
-  "notes": "Short local runs on a machine in normal use. Subsequent port edits only change comments; training operations are unchanged."
+  "notes": "Short local runs on a machine in normal use, taken at source_revision. Later changes to comments and the sampling interface do not change training operations."
 }
