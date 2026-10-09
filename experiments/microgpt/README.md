@@ -18,8 +18,9 @@ cd experiments/microgpt
 ./fetch-reference.sh            # input.txt, microgpt.py, microgpt_tape.py (pinned, checksummed)
 lg microgpt.lg 1000             # VM; the argument is the number of training steps
 aot/build.sh                    # native binary via lg compile (needs Go)
-aot/microgpt-native 1000
-wasm/build.sh 20                # browser page via lg -w; serve it with the line below
+aot/microgpt-native 1000 weights.txt   # train, save the weights (~5 min)
+lg microgpt.lg 0 weights.txt    # load them and only sample (either build reads either's file)
+LETGO_USE_TINYGO=1 wasm/build.sh --weights weights.txt   # browser page that samples from them
 python3 ../../scripts/serve.py --dir wasm/out --headers ../../harness/serve.json
 python3 -I microgpt.py          # the reference, 1000 steps
 python3 -I count_tokens.py 1000 # its token count, for ms/token
@@ -95,17 +96,44 @@ and the weighted `choose` (Python's stdlib has them; let-go doesn't), the ordere
 
 ## In the browser
 
-`wasm/build.sh [steps]` builds a page with `lg -w`, which runs the bytecode VM
-compiled to wasm. Training matches the VM exactly: same loss, same samples.
-In headless Chromium it is about 7× slower, at 621 ms/token against 86 for
-`lg microgpt.lg` on the same lg (20 steps). The `lg compile` gains don't carry
-over, because `-w` doesn't use the lowered Go.
+`wasm/build.sh` builds a page with `lg -w`, which runs the bytecode VM
+compiled to wasm. It comes in two modes:
+
+- `wasm/build.sh --weights weights.txt` bakes in weights trained elsewhere,
+  and the page only samples. With weights from a native 1000-step run
+  (loss 2.6057), the TinyGo page prints the same 20 names as the native binary
+  ("kirli", "keson", "amayan", "jaden", ...), about 20 s after load in headless
+  Chromium.
+- `wasm/build.sh [steps]` trains in the page (20 steps by default) and then
+  samples. Loss and samples match the VM exactly.
+
+`LETGO_USE_TINYGO=1` (with `tinygo` on PATH; let-go's CI pins 0.42.0) builds
+with TinyGo instead of stock Go, and the script then defaults
+`LETGO_TINYGO_OPT` to 2. Training in headless Chromium, 20 steps, the same lg:
+
+| build | page | ms/token |
+|---|---:|---:|
+| stock Go `lg -w` | 8.5 MB | 432–479 |
+| TinyGo `-opt=z` (lg's default) | 2.2 MB | ~296 |
+| TinyGo `-opt=2` | 2.6 MB | ~245 |
+| TinyGo `-opt=2 -gc=leaking` | 2.2 MB | ~118 |
+| `lg microgpt.lg`, native VM | | 86 |
+
+`LETGO_TINYGO_GC=precise` is no different from the default collector. The
+leaking GC never frees, so it is a measurement (about half of TinyGo's time is
+collection), not a build to ship. None of the `lg compile` gains carry over,
+because `-w` doesn't use the lowered Go. A TinyGo build takes 3.5–4.5 minutes,
+against about one for stock Go.
 
 The page needs cross-origin isolation (COOP/COEP), which `scripts/serve.py`
-sets from `harness/serve.json`. `lg -w` embeds no resources, and the browser
-passes no arguments. So the script writes a copy of `microgpt.lg` to
-`wasm/gen/` with `input.txt` inlined as a string and the default step count
-replaced (20 by default, about 90 s of training). The page is 8.5 MB.
+sets from `harness/serve.json`. `lg -w` embeds no resources and the browser
+passes no arguments, so the script writes a copy of `microgpt.lg` to
+`wasm/gen/` with `input.txt` inlined as a string and the entry point replaced.
+
+The weights file is the params' data, one number per line, in params order.
+It is plain text rather than EDN because a binary from `lg compile` links no
+reader: `read-string` and `edn/read-string` are unbound there, and the call
+only fails when it runs.
 
 ## Profiling the native binary
 

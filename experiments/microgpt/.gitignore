@@ -5,6 +5,8 @@ microgpt_tape.py
 # aot/build.sh output.
 aot/gen/
 aot/microgpt-native
+# Trained weights (lg microgpt.lg 1000 weights.txt).
+weights.txt
 # wasm/build.sh output.
 wasm/gen/
 wasm/out/

@@ -6,7 +6,9 @@
 ;; from the Python. The RNG differs, so document order and init differ
 ;; too: compare speed per token (printed at the end), not per step.
 ;;
-;;   lg microgpt.lg [num-steps]      ; run in this dir after fetch-reference.sh
+;;   lg microgpt.lg [num-steps]          ; run in this dir after fetch-reference.sh
+;;   lg microgpt.lg 1000 weights.txt     ; train, then save the weights
+;;   lg microgpt.lg 0 weights.txt        ; load them and only sample
 
 (ns microgpt
   (:require [math]
@@ -227,6 +229,20 @@
       (println (format "\ntrain time: %.1fs | %d tokens | %.2f ms/token"
                        (/ ms 1000.0) @n-tokens (/ (double ms) @n-tokens))))))
 
+;; --- Weights ---------------------------------------------------------------
+;; The params' data in params order, one number per line: pr-str prints a
+;; double so that parse-double gives back the same bits. Plain text rather than
+;; EDN because a binary from `lg compile` links no reader (read-string is
+;; unbound there). The vocabulary comes from input.txt, so weights only fit the
+;; dataset they were trained on.
+(defn weights [] (mapv #(.data %) params))
+(defn set-weights! [ws]
+  (assert (= (count ws) (count params)) "weights don't fit this model")
+  (dorun (map #(set-field! %1 'data %2) params ws)))
+(defn save-weights! [path] (spit path (str (str/join "\n" (map pr-str (weights))) "\n")))
+(defn load-weights! [path]
+  (set-weights! (mapv parse-double (str/split (str/trim (slurp path)) #"\s+"))))
+
 ;; --- Inference -------------------------------------------------------------
 ;; random.choices with weights: walk the cumulative sum.
 (defn choose [weights]
@@ -253,9 +269,14 @@
 ;; An entry point so `lg compile` and `lg -w` can build it. Both evaluate the
 ;; top-level forms while building, so the call below is guarded; `lg
 ;; microgpt.lg` still runs it.
-(defn -main [& args]
-  (let [a (or (first args) (first *command-line-args*))]
-    (train! (if a (parse-long (str a)) 1000))
+(defn -main [& argv]
+  (let [argv (or (seq argv) *command-line-args*)
+        steps (if (first argv) (parse-long (str (first argv))) 1000)
+        path (second argv)]
+    (if (and path (zero? steps))
+      (load-weights! path)
+      (do (train! steps)
+          (when path (save-weights! path))))
     (sample!)))
 
 (when-not *compiling-aot* (-main))
