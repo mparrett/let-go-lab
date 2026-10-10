@@ -25,6 +25,12 @@ Builds verify the checkout's HEAD against the pin. `LETGO_NATIVE` is separate
 from the `LETGO` used by VM/browser recipes. CI and Pages retain v1.13.0 for
 the browser; a separate native CI job uses the SHA pin.
 
+Every invocation runs upstream's `make build`, including its smoke gates, even
+when `bin/lg` exists. Go's build cache avoids unchanged compilation, while the
+gates verify the candidate before promotion. With `LETGO_NATIVE`, this writes `build/` and
+`bin/lg` inside that checkout. Run native recipes sequentially: they share the
+runtime cache and generated build outputs.
+
 Mandelbrot needs a sixel terminal for interactive output; pathtrace uses the
 iTerm2 inline-image protocol. Piped/headless runs execute each demo's benchmark.
 Pathtrace's headless PNG writer needs `openssl` on PATH. Microgpt reads its data
@@ -68,7 +74,8 @@ normal 32-sample workload and compares the actual PNG bytes, not timings.
 
 The native CI job builds all three executables, checks Mandelbrot's frame count,
 iteration counts and actual sixel bytes, compares pathtrace PNG bytes, and checks
-microgpt's pretrained samples and all 4,192 weights after three training steps.
+microgpt's pretrained samples and all 4,192 weights after three training steps
+within a maximum absolute tolerance of `1e-12`.
 It also runs the existing microgpt comparison with Python. For a local check:
 
 ```sh
@@ -76,10 +83,13 @@ scripts/build-native.sh mandelbrot
 scripts/build-native.sh pathtrace
 scripts/build-native.sh microgpt
 PIN=$(cat config/let-go-native.sha)
-python3 test/native_demo_test.py --lg ".cache/let-go-native/$PIN/bin/lg"
+python3 test/native_demo_test.py --lg ".cache/let-go-native/$PIN/bin/lg" \
+  --letgo-src ".cache/let-go-native/$PIN"
 ```
 
-When using `LETGO_NATIVE`, pass that checkout's `bin/lg` to the test instead.
+When using `LETGO_NATIVE`, pass its binary with `--lg` and its checkout directory
+with `--letgo-src`. The test refuses optimized Python execution because `-O`
+would disable its parity assertions.
 
 Ptcanvas remains a VM/browser demo: this compiler emits an invalid type assertion
 at two native closure call sites. Microgpt's explicit loops, type hints,
