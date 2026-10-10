@@ -92,6 +92,7 @@ jobs:
       - name: Compare native demos with the VM
         run: |
           PIN=$(cat config/let-go-native.sha)
-          python3 test/native_demo_test.py --lg ".cache/let-go-native/$PIN/bin/lg"
+          python3 test/native_demo_test.py --lg ".cache/let-go-native/$PIN/bin/lg" \
+            --letgo-src ".cache/let-go-native/$PIN"
           python3 -I experiments/microgpt/verify.py --lg "$PWD/.cache/let-go-native/$PIN/bin/lg"
           LG="$PWD/dist/native/mandelbrot" python3 test/eof_exit_test.py

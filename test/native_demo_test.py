@@ -2,6 +2,7 @@
 """Check full native demos against the VM: frame counts, PNG bytes, GPT weights.
 
 Usage: python3 test/native_demo_test.py --lg /path/to/pinned-let-go/bin/lg
+       --letgo-src /path/to/pinned-let-go
 Build mandelbrot, pathtrace, and microgpt with scripts/build-native.sh first.
 """
 import argparse
@@ -20,6 +21,7 @@ def run(command, cwd):
 
 
 def frames(output):
+    # Golden home view: 160×120 grid, scale 3, maxiter 96; normal 20-frame bench.
     rows = re.findall(r"frame (\d+)\s+compute=\d+ms\s+encode=\d+ms\s+"
                       r"iters=(\d+).*bytes=(\d+)", output)
     assert rows == [(str(i), "450584", "27695") for i in range(20)], output
@@ -27,6 +29,7 @@ def frames(output):
 
 
 def samples(output):
+    # First eight samples from committed weights.txt with the demo's default seed.
     names = re.findall(r"sample\s+\d+: (\w*)", output)
     assert len(names) == 20, output
     assert names[:8] == ["anria", "aliia", "kirli", "keson", "denan", "amayan",
@@ -37,8 +40,12 @@ def samples(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lg", required=True, type=Path)
+    parser.add_argument("--letgo-src", required=True, type=Path)
     args = parser.parse_args()
+    if not __debug__:
+        parser.error("run without -O/PYTHONOPTIMIZE so parity assertions execute")
     lg = args.lg.resolve()
+    source_checkout = args.letgo_src.resolve()
     native = LAB / "dist/native"
     with tempfile.TemporaryDirectory(prefix="native-demo-parity-") as directory:
         temporary = Path(directory)
@@ -61,7 +68,7 @@ def main():
         frame_script.write_text(source)
         frame_binary = temporary / "frame-native"
         subprocess.run([lg, "compile", "-o", frame_binary, frame_script], cwd=LAB,
-                       env={**os.environ, "LETGO_SRC": str(lg.parent.parent)},
+                       env={**os.environ, "LETGO_SRC": str(source_checkout)},
                        stdout=subprocess.PIPE, check=True, timeout=300)
         vm_sixel = subprocess.check_output([lg, frame_script], cwd=temporary, timeout=300)
         native_sixel = subprocess.check_output([frame_binary], cwd=temporary, timeout=300)
