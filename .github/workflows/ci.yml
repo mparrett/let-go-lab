@@ -96,3 +96,41 @@ jobs:
             --letgo-src ".cache/let-go-native/$PIN"
           python3 -I experiments/microgpt/verify.py --lg "$PWD/.cache/let-go-native/$PIN/bin/lg"
           LG="$PWD/dist/native/mandelbrot" python3 test/eof_exit_test.py
+
+  # The standalone Go modules: lint and test each one in its own directory,
+  # since the jobs above never build them. demos/mandelbrot-aot is left out:
+  # it needs a let-go checkout beside the repo (see its go.mod).
+  go-modules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [experiments/cueplay, experiments/aot/native]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache: false  # tiny modules, and aot/native has no go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./...
+
+      # cueplay promises cgo-free builds on macOS too; vet above covers Linux.
+      - name: build for macOS
+        run: GOOS=darwin go build ./...
