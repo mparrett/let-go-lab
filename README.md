@@ -56,3 +56,5 @@ measurements, and compiler limitations.
 - **[microgpt](experiments/microgpt)** — Karpathy's scalar GPT in one let-go
   file: train on the VM or natively, sample in the browser, and check numerical
   agreement with Python. Includes trained weights and reproducible timings.
+- **[cueplay](experiments/cueplay)** — intro-then-gapless-loop cue player on
+  oto, with no cgo: the prototype for let-go's native audio binding (nooga/let-go#255).
