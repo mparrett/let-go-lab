@@ -7,8 +7,8 @@ default:
     @just --list
 
 # native TUI of a demo (default: mandelbrot) — needs a sixel-capable terminal
-play demo="mandelbrot":
-    LETGO="{{LETGO}}" scripts/play.sh {{demo}}
+play demo="mandelbrot" *ARGS:
+    LETGO="{{LETGO}}" scripts/play.sh {{demo}} {{ARGS}}
 
 # compile a full demo using the SHA-pinned native toolchain
 native demo="mandelbrot":
