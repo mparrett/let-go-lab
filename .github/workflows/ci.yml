@@ -106,7 +106,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [experiments/cueplay, experiments/aot/native]
+        module: [experiments/cueplay, experiments/aot/native, experiments/aot/arrays]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
