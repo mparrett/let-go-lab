@@ -38,10 +38,20 @@ concurrency:
 # plain HTTP (no COOP/COEP) so the coi-serviceworker path is the one exercised:
 # renders identically to the headered build.
 
+env:
+  # Build the pages with TinyGo instead of the stock Go toolchain: about twice
+  # as fast in the browser and a third of the download (docs/profiling-2026-10.md).
+  # Pinned like let-go's own CI; -opt=2 trades a little size for speed.
+  TINYGO_VERSION: 0.42.0
+  LETGO_USE_TINYGO: '1'
+  LETGO_TINYGO_OPT: '2'
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A TinyGo page build takes 4-5 minutes, and there are five (mandelbrot and
+    # its sixel variant, pathtrace, ptcanvas, microgpt).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +68,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Install TinyGo (pinned)
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo${TINYGO_VERSION}.linux-amd64.tar.gz" \
+            -o "$RUNNER_TEMP/tinygo.tar.gz"
+          tar -xzf "$RUNNER_TEMP/tinygo.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/tinygo/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/tinygo/bin/tinygo" version
 
       - name: Build let-go (pinned release)
         run: |
