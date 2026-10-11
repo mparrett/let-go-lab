@@ -3,7 +3,10 @@
 Experiments on [let-go](https://github.com/nooga/let-go) — sixel graphics,
 terminal UI, wasm-in-the-browser — decoupled from any one client app.
 
-**▶ [Try the mandelbrot demo in your browser](https://mparrett.github.io/let-go-lab/)** — live, no install (let-go compiled to WASM, running in xterm.js).
+**▶ Live in your browser, no install** (let-go compiled to WASM):
+[mandelbrot](https://matt.parrett.us/let-go-lab/) in xterm.js ·
+[microgpt sampler](https://matt.parrett.us/let-go-lab/microgpt/). The other
+demos run locally with `just serve <demo>` or `just play <demo>`.
 
 ![Mandelbrot sixel demo running in the browser via xterm.js](docs/img/mandelbrot-browser.png)
 
@@ -49,6 +52,24 @@ measurements, and compiler limitations.
   The same `.lg` runs natively in any sixel-capable terminal (`just play`):
 
   ![Mandelbrot demo zoomed in, running natively in iTerm2](docs/img/mandelbrot-native-zoom.png)
+
+  A link or flags can set the starting view, e.g.
+  [`?x=-0.745&y=0.11&zoom=50`](https://matt.parrett.us/let-go-lab/?x=-0.745&y=0.11&zoom=50)
+  or `just play mandelbrot --zoom 50 --x -0.745 --y 0.11` (also `maxiter`).
+
+- **[pathtrace](demos/pathtrace)** — a small progressive Monte Carlo path tracer
+  that encodes its own PNG and shows it through the iTerm2 inline-image protocol,
+  in xterm.js or natively in iTerm2. Each pass adds a sample per pixel, so the
+  noise visibly settles. Controls: `hjkl` / arrows orbit · `n` next scene ·
+  `r` reset · `q` quit; `--scene N` / `?scene=N` picks the starting scene.
+  Headless runs render 32 samples/pixel and write `out.png`.
+- **[ptcanvas](demos/ptcanvas)** — an allocation-free path tracer (scalars only,
+  scene as flat arrays), ported from a JS original to test whether manual
+  unboxing helps the let-go VM. Draws to a `<canvas>` in the browser
+  (`just serve ptcanvas`); a non-TTY native run prints M paths/s.
+- **[mandelbrot-aot](demos/mandelbrot-aot)** — the mandelbrot `escape` kernel
+  lowered from `.lg` to native Go with `lg compile`, driven by a Go terminal
+  renderer: same output as the VM, about 72× faster.
 
 ## Experiments
 
