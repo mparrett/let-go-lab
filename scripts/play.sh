@@ -8,7 +8,8 @@
 # recent xterm (-ti vt340), or recent kitty. Without one you get the status text
 # but no image (the DCS is silently ignored).
 #
-# Usage: play.sh [demo]      demo name under demos/ (default: mandelbrot)
+# Usage: play.sh [demo] [flags...]   demo name under demos/ (default: mandelbrot);
+#        flags go to the demo, e.g. play.sh mandelbrot --zoom 50 --x -0.745 --y 0.11
 #
 # LETGO defaults to ./let-go (symlink to your let-go checkout). Override LETGO=<path>.
 
@@ -25,4 +26,4 @@ LGFILE="$LAB/demos/$DEMO/$DEMO.lg"
 [[ -f "$LGFILE" ]] || { echo "play: no demo at $LGFILE" >&2; exit 1; }
 [[ -x "$LG" ]]     || { echo "play: no lg at $LG (set LETGO=<path-to-let-go>)" >&2; exit 1; }
 
-exec env LETGO_SRC="$LETGO" "$LG" "$LGFILE"
+exec env LETGO_SRC="$LETGO" "$LG" "$LGFILE" "${@:2}"
