@@ -17,6 +17,12 @@ three runs. Ratios are the point; absolutes are this machine.
 | Go, `arr.Get(i)` direct, still boxed (`BenchmarkGetBoxed`) | 18-23 | ~3x |
 | Go, kind asserted once, slice hoisted (`BenchmarkHoisted`) | 1.6-2.3 | ~30-40x |
 | Hand-written Go over `[]float64` (`BenchmarkPlain`) | 1.4-1.8 | ~40x |
+| AOT with [nooga/let-go#1057](https://github.com/nooga/let-go/pull/1057) (`^doubles` hint) | 0.95-1.03 | ~30x |
+
+The last row is the same kernel with `^doubles a` on both fns, compiled by the
+PR's branch (load under 7, same session as the hand-Go row's low-load run of
+0.93-0.99). Its loop is `arg__1, callErr = arg0.AtFloat64(i)` and
+`s = s + arg__1` on `arg0 *vm.TypedArray`, `s float64`.
 
 Reproduce the Go rows with `go test -bench=. -benchtime=2s` here; the module
 pins the let-go release in `go.mod` and needs no checkout. The first two rows
