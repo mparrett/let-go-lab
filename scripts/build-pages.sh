@@ -29,7 +29,7 @@ LG="$(lg_path "$LETGO")"
 OUT="${1:-$LAB/_site}"
 # Browser demos under demos/, each served at /<demo>/. Keep in step with the
 # tiles in site/index.html.
-DEMOS=(mandelbrot pathtrace ptcanvas)
+DEMOS=(mandelbrot mandelbrot-sixel pathtrace ptcanvas)
 
 [[ -x "$LG" ]] || { echo "build-pages: no lg at $LG (set LETGO=<path>)" >&2; exit 1; }
 "$LG" -h 2>&1 | grep -q -- '-w-shell' || {

@@ -51,7 +51,9 @@ measurements, and compiler limitations.
   exact in the browser (taps map straight to the canvas), and native too where
   the terminal's cell size can be measured (under tmux, or a terminal that
   answers the xterm window-ops), with keyboard pan/zoom as the fallback. The
-  browser page adds buttons for touch.
+  browser page adds buttons for touch. The same program also runs in the
+  browser as sixel in xterm.js (`demos/mandelbrot-sixel`, at
+  `/mandelbrot-sixel/` on Pages).
 
   The same `.lg` runs natively in any sixel-capable terminal (`just play`):
 

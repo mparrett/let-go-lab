@@ -22,7 +22,7 @@ except ImportError:
     print("Playwright is required for the Pages site smoke test")
     sys.exit(77)
 
-DEMOS = ["mandelbrot", "pathtrace", "ptcanvas", "microgpt"]
+DEMOS = ["mandelbrot", "mandelbrot-sixel", "pathtrace", "ptcanvas", "microgpt"]
 
 
 class QuietHandler(SimpleHTTPRequestHandler):

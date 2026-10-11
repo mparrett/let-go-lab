@@ -1,9 +1,8 @@
-;; pathtrace.lg — standalone let-go WASM demo: a small progressive Monte Carlo
-;; path tracer. Unlike the mandelbrot demo (sixel), this encodes its own PNG and
-;; displays it inline via the iTerm2 inline-image protocol (OSC 1337), which the
-;; browser shell's @xterm/addon-image decodes (kitty is NOT decoded by that
-;; addon; iTerm2 IIP is, by default). The same escape shows the image in iTerm2
-;; natively. base64 is the transport, which matters: a let-go String is UTF-8, so
+;; pathtrace.lg — a small progressive Monte Carlo path tracer for let-go. In the
+;; browser (let-go >= v1.13.0) each pass goes to a <canvas> through
+;; surface/present; see show-canvas. In a terminal it encodes its own PNG and
+;; displays it inline via the iTerm2 inline-image protocol (OSC 1337), which
+;; iTerm2 shows natively. base64 is the transport, which matters: a let-go String is UTF-8, so
 ;; bytes >127 cannot be placed into one without corruption — base64 keeps every
 ;; emitted byte in 0..127. Native non-iTerm / headless runs write the PNG bytes
 ;; to a real out.png with `spit` on a byte-array.
@@ -377,8 +376,9 @@
 ;; Display + disk output
 ;; ===========================================================================
 ;; iTerm2 inline-image escape carrying a base64 PNG, shown at DISP scale. Decoded
-;; by @xterm/addon-image (browser) and iTerm2 (native); other terminals ignore the
-;; unknown OSC. size = decoded byte count (the addon uses it as a sanity bound).
+;; by iTerm2 (and @xterm/addon-image, which the browser page no longer uses);
+;; other terminals ignore the unknown OSC. size = decoded byte count (a decoder's
+;; sanity bound).
 (defn iip-escape [png-bytes b64]
   (str ESC "]1337;File=inline=1;size=" (count png-bytes)
        ";width=" (* W DISP) "px;height=" (* H DISP) "px;preserveAspectRatio=1:"
@@ -394,13 +394,6 @@
 ;; ===========================================================================
 (def COL0 2)
 (def IMG-ROW0 6)
-(def CHROME-ROWS 8)
-
-(defn announce-geometry []
-  ;; Tell the shell the on-screen image size (px) + chrome rows so it content-sizes
-  ;; the terminal. Native terminals ignore the unknown OSC.
-  (term/write (str ESC "]5002;" (* W DISP) ";" (* H DISP) ";" CHROME-ROWS ";" COL0 (char 7)))
-  (term/flush))
 
 (defn setup! []
   (term/raw-mode!)
@@ -545,7 +538,6 @@
     :else (do
             (setup!)
             (try
-              (announce-geometry)
               (loop-keys (start-scene))
               (finally (teardown!))))))
 
