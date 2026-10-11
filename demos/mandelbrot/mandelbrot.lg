@@ -78,7 +78,11 @@
   (if *in-wasm*
     (js/url-param k)
     (second (drop-while #(not= % (str "--" k)) *command-line-args*))))
-(defn arg-double [k default] (or (some-> (arg k) parse-double) default))
+;; Non-finite values (inf, NaN, 1e400) count as unparsable: NaN fails both
+;; comparisons, so a degenerate view can't come in through a link or flag.
+(defn arg-double [k default]
+  (let [d (some-> (arg k) parse-double)]
+    (if (and d (< -1e300 d 1e300)) d default)))
 
 ;; The starting view: home, unless the flags say otherwise. `r` still resets to
 ;; home. A missing or unparsable flag keeps the home value.
@@ -87,7 +91,8 @@
     [(arg-double "x" home-x)
      (arg-double "y" home-y)
      (if (pos? z) (/ home-w z) home-w)
-     (-> (arg-double "maxiter" home-maxiter) int (max mi-min) (min mi-max))]))
+     ;; Clamp before int: let-go's int throws outside the int32 range.
+     (-> (arg-double "maxiter" home-maxiter) (max mi-min) (min mi-max) int)]))
 
 ;; A tap recenters on the tapped point; whether it ALSO zooms in depends on how
 ;; central the tap was. The tap's offset from the current center is normalized
