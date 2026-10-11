@@ -1,0 +1,23 @@
+(ns sum-arr)
+
+(defn fill [a n]
+  (loop [i 0]
+    (when (< i n)
+      (aset a i (* 0.5 i))
+      (recur (inc i)))))
+
+(defn sum-arr [a n]
+  (loop [i 0 s 0.0]
+    (if (>= i n) s (recur (inc i) (+ s (aget a i))))))
+
+(defn -main [& args]
+  (let [n 1000000
+        reps 50
+        a (double-array n)]
+    (fill a n)
+    (let [t0 (System/nanoTime)
+          r (loop [k 0 acc 0.0]
+              (if (>= k reps) acc (recur (inc k) (+ acc (sum-arr a n)))))
+          t1 (System/nanoTime)]
+      (println "result" r)
+      (println "ms/rep" (/ (/ (- t1 t0) 1e6) reps)))))
