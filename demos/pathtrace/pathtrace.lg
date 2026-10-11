@@ -18,6 +18,12 @@
 
 (def ESC (str (char 27)))
 
+;; Wall-clock milliseconds for the timing readouts. (inst-ms (now)) would
+;; read the same clock, but under TinyGo it fails on the first call before let-go
+;; with nooga/let-go#1054 (TinyGo can't call time.Time.UnixMilli by reflection),
+;; and the browser builds use TinyGo.
+(defn now-ms [] (System/currentTimeMillis))
+
 ;; ===========================================================================
 ;; PNG encoder — produces a vector of bytes (ints 0..255). zlib uses *stored*
 ;; (uncompressed) DEFLATE blocks: no compression algorithm, just framing + the
@@ -432,18 +438,18 @@
 ;; In the browser the frame goes to a <canvas> (surface/present) and the status
 ;; to the page (js/emit); the page draws both. No PNG, no base64, no escape.
 (defn show-canvas [scene-idx accum spp compute-ms]
-  (let [t0 (inst-ms (now))
+  (let [t0 (now-ms)
         fb (tonemap-rgba accum spp)]
     (surface/present fb W H)
     (js/emit :status {:scene scene-idx :spp spp :w W :h H
-                      :compute compute-ms :present (- (inst-ms (now)) t0)})))
+                      :compute compute-ms :present (- (now-ms) t0)})))
 
 (defn show-terminal [scene-idx accum spp compute-ms]
-  (let [t0 (inst-ms (now))
+  (let [t0 (now-ms)
         fb (tonemap accum spp)
         png (encode-png W H fb)
         b64 (base64 png)
-        encode-ms (- (inst-ms (now)) t0)]
+        encode-ms (- (now-ms) t0)]
     (term/write begin-sync)
     (status scene-idx spp)
     (term/move-cursor COL0 IMG-ROW0)
@@ -478,10 +484,10 @@
          spp 0]
     (let [cp (cam-pos th hy)
           refine? (< spp max-spp)
-          t0 (inst-ms (now))
+          t0 (now-ms)
           _ (when refine? (render-pass scene-idx cp accum))
           spp' (if refine? (inc spp) spp)
-          compute-ms (- (inst-ms (now)) t0)]
+          compute-ms (- (now-ms) t0)]
       (when refine? (show scene-idx sc cp accum spp' compute-ms))
       ;; Refining + no key waiting → loop to add another pass. Otherwise (a key is
       ;; pending, or we're converged) read one key and act on it.
@@ -513,19 +519,19 @@
   (let [sc (nth scenes 0)
         cp (cam-pos home-th home-hy)
         accum (make-array :double (* W H 3))
-        t0 (inst-ms (now))]
+        t0 (now-ms)]
     (loop [n 0]
       (when (< n bench-spp)
-        (let [pt0 (inst-ms (now))]
+        (let [pt0 (now-ms)]
           (render-pass 0 cp accum)
-          (println (str "pass " (inc n) "  " (- (inst-ms (now)) pt0) "ms")))
+          (println (str "pass " (inc n) "  " (- (now-ms) pt0) "ms")))
         (recur (inc n))))
-    (let [compute-ms (- (inst-ms (now)) t0)
-          et0 (inst-ms (now))
+    (let [compute-ms (- (now-ms) t0)
+          et0 (now-ms)
           fb (tonemap accum bench-spp)
           png (encode-png W H fb)
           _ (base64 png)              ; time the full per-frame encode
-          encode-ms (- (inst-ms (now)) et0)]
+          encode-ms (- (now-ms) et0)]
       (write-png-file "out.png" png)
       (println (str "total compute " compute-ms "ms · encode " encode-ms "ms · png "
                     (count png) " bytes"))

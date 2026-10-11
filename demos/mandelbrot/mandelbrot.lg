@@ -23,6 +23,12 @@
 
 (def ESC "")
 
+;; Wall-clock milliseconds for the timing readouts. (inst-ms (now)) would
+;; read the same clock, but under TinyGo it fails on the first call before let-go
+;; with nooga/let-go#1054 (TinyGo can't call time.Time.UnixMilli by reflection),
+;; and the browser builds use TinyGo.
+(defn now-ms [] (System/currentTimeMillis))
+
 ;; --- Render parameters ---------------------------------------------------
 ;; SPEED LEVER: the cost is one escape() call per *computed* pixel. We compute
 ;; a coarse CW×CH grid, then upscale each computed pixel into a SCALE×SCALE
@@ -311,11 +317,11 @@
   (term/move-cursor COL0 3)               ; coords row (status row 2)
   (term/write "computing…                          ")
   (term/flush)
-  (let [t0 (inst-ms (now))
+  (let [t0 (now-ms)
         gi (compute-grid cx cy vw mi)
         grid (first gi)
         iters (second gi)
-        t1 (inst-ms (now))
+        t1 (now-ms)
         width (img-w scale)
         height (img-h scale)
         bands (quot height 6)]
@@ -341,7 +347,7 @@
     ;; bottom-status FIRST — it writes at the cursor just below the image
     ;; (relative). status SECOND/last, so it still overwrites the "computing…"
     ;; marker on the coords row up top.
-    (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1) scale)
+    (bottom-status mi iters (- t1 t0) (- (now-ms) t1) scale)
     (status cx cy vw)
     (rendered-scale-cue scale)
     (term/flush)))
@@ -365,10 +371,10 @@
 
 (defn render-canvas [cx cy vw mi]
   (js/emit :busy {:on true})                   ; the page dims the old frame meanwhile
-  (let [t0 (inst-ms (now))
+  (let [t0 (now-ms)
         gi (compute-grid cx cy vw mi)
         grid (first gi)
-        t1 (inst-ms (now))
+        t1 (now-ms)
         n (* CW CH)
         fb (make-array :byte (* 4 n))]
     (loop [i 0]
@@ -382,7 +388,7 @@
     (surface/present fb CW CH)
     (js/emit :status {:x (r5 cx) :y (r5 cy) :zoom (int (/ home-w vw)) :vw vw :maxiter mi
                       :iters (second gi) :w CW :h CH
-                      :compute (- t1 t0) :present (- (inst-ms (now)) t1)})))
+                      :compute (- t1 t0) :present (- (now-ms) t1)})))
 
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
 (def up (str ESC "[A"))
@@ -690,11 +696,11 @@
                 " scale " home-scale " maxiter " home-maxiter " (no TTY)"))
   (loop [n 0]
     (when (< n bench-frames)
-      (let [t0 (inst-ms (now))
+      (let [t0 (now-ms)
             gi (compute-grid home-x home-y home-w home-maxiter)
-            t1 (inst-ms (now))
+            t1 (now-ms)
             s  (build-frame (first gi) home-scale)
-            t2 (inst-ms (now))
+            t2 (now-ms)
             compute-ms (- t1 t0)
             ips (if (> compute-ms 0) (quot (* (second gi) 1000) compute-ms) 0)]
         (println (str "frame " n "  compute=" compute-ms "ms  encode=" (- t2 t1)
