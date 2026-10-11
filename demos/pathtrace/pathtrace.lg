@@ -148,61 +148,137 @@
   (let [n (some-> (arg "scene") parse-long)]
     (if (and n (< -1 n (count scenes))) n 0)))
 
-(defn s-c [s] [(nth s 0)(nth s 1)(nth s 2)])
-(defn s-r [s] (nth s 3))
-(defn s-alb [s] [(nth s 4)(nth s 5)(nth s 6)])
-(defn s-emit [s] [(nth s 7)(nth s 8)(nth s 9)])
-(defn emissive? [s] (> (+ (nth s 7)(nth s 8)(nth s 9)) 0.0))
+;; The hot path is scalar: no vectors are built per sample. Each scene is one
+;; flat double-array, 10 doubles per sphere, and the ray state lives in the
+;; reused double-array R. The arithmetic is written out in the same order as the
+;; vec3 helpers above, and rand is drawn in the same order, so a pass produces
+;; the same floats as the vector version did (out.png is byte-identical).
+(def scene-arrays
+  (mapv (fn [sc]
+          (let [a (make-array :double (* 10 (count sc)))]
+            (loop [i 0 fs (mapcat identity sc)]
+              (when (seq fs)
+                (aset a i (double (first fs)))
+                (recur (inc i) (rest fs))))
+            a))
+        scenes))
 
-;; Ray-sphere: rd is unit length, so a=1 and we solve t^2 + 2b t + c = 0 with the
-;; half-b trick. Returns the nearest t past a small epsilon (self-shadow bias) or nil.
-(defn hit-sphere [ro rd s]
-  (let [oc (v- ro (s-c s))
-        b (dot oc rd)
-        c (- (dot oc oc) (* (s-r s)(s-r s)))
+;; R slots: 0-2 ray origin, 3-5 ray direction, 6 nearest t, 7-9 hit point,
+;; 10-12 normal, 13-15 radiance, 16-18 scratch.
+(def R (make-array :double 19))
+(def max-depth 5)
+;; Albedo of each diffuse bounce on the current path, 3 per depth.
+(def path-alb (make-array :double (* 3 max-depth)))
+
+;; Ray-sphere for the sphere at offset off: rd is unit length, so a=1 and we
+;; solve t^2 + 2b t + c = 0 with the half-b trick. Returns the nearest t past a
+;; small epsilon (self-shadow bias), or -1.0 for a miss.
+(defn hit-sphere [S off ox oy oz dx dy dz]
+  (let [ocx (- ox (aget S off))
+        ocy (- oy (aget S (+ off 1)))
+        ocz (- oz (aget S (+ off 2)))
+        r (aget S (+ off 3))
+        b (+ (* ocx dx) (* ocy dy) (* ocz dz))
+        c (- (+ (* ocx ocx) (* ocy ocy) (* ocz ocz)) (* r r))
         disc (- (* b b) c)]
-    (if (< disc 0.0) nil
+    (if (< disc 0.0) -1.0
       (let [sq (math/sqrt disc) t1 (- (- b) sq)]
         (if (> t1 0.001) t1
-          (let [t2 (+ (- b) sq)] (if (> t2 0.001) t2 nil)))))))
+          (let [t2 (+ (- b) sq)] (if (> t2 0.001) t2 -1.0)))))))
 
-(defn nearest [sc ro rd]
-  (loop [i 0 best 1.0e30 bs nil]
-    (if (>= i (count sc)) (if bs [best bs] nil)
-      (let [t (hit-sphere ro rd (nth sc i))]
-        (if (and t (< t best)) (recur (inc i) t (nth sc i))
-            (recur (inc i) best bs))))))
+;; Offset of the nearest sphere the ray in R hits (its t into R[6]), or -1.
+(defn nearest [S]
+  (let [ox (aget R 0) oy (aget R 1) oz (aget R 2)
+        dx (aget R 3) dy (aget R 4) dz (aget R 5)
+        n (alength S)]
+    (loop [off 0 best 1.0e30 bo -1]
+      (if (>= off n)
+        (do (aset R 6 best) bo)
+        (let [t (hit-sphere S off ox oy oz dx dy dz)]
+          (if (and (> t 0.0) (< t best))
+            (recur (+ off 10) t off)
+            (recur (+ off 10) best bo)))))))
 
 ;; Sky acts as a soft area light (a vertical gradient), so even pure path tracing
-;; with no explicit light sampling converges — every escaping ray collects energy.
-(defn sky [rd]
-  (let [t (* 0.5 (+ 1.0 (nth rd 1)))]
-    (v+ (vsc [1.0 1.0 1.0] (* 0.55 (- 1.0 t)))
-        (vsc [0.5 0.7 1.0] (* 0.85 t)))))
+;; with no explicit light sampling converges: every escaping ray collects energy.
+;; Writes the sky colour for direction dy into R[13..15].
+(defn sky! [dy]
+  (let [t (* 0.5 (+ 1.0 dy))
+        k1 (* 0.55 (- 1.0 t))
+        k2 (* 0.85 t)]
+    (aset R 13 (+ (* 1.0 k1) (* 0.5 k2)))
+    (aset R 14 (+ (* 1.0 k1) (* 0.7 k2)))
+    (aset R 15 (+ (* 1.0 k1) (* 1.0 k2)))))
 
-(def max-depth 5)
-
-;; Cosine-weighted hemisphere sample about n. With this pdf the cos term and the
-;; pdf cancel, so the diffuse estimator is simply albedo (X) incoming radiance.
-(defn cosine-dir [n]
-  (let [r1 (* 6.2831853 (rand))
+;; Cosine-weighted hemisphere sample about the normal in R[10..12], written to
+;; the ray direction R[3..5]. With this pdf the cos term and the pdf cancel, so
+;; the diffuse estimator is simply albedo (X) incoming radiance.
+(defn cosine-dir! []
+  (let [nx (aget R 10) ny (aget R 11) nz (aget R 12)
+        r1 (* 6.2831853 (rand))
         r2 (rand) r2s (math/sqrt r2)
-        a (if (> (math/abs (nth n 0)) 0.9) [0.0 1.0 0.0] [1.0 0.0 0.0])
-        u (norm (cross a n))
-        v (cross n u)]
-    (norm (v+ (v+ (vsc u (* (math/cos r1) r2s)) (vsc v (* (math/sin r1) r2s)))
-              (vsc n (math/sqrt (- 1.0 r2)))))))
+        far (> (math/abs nx) 0.9)
+        ax (if far 0.0 1.0) ay (if far 1.0 0.0) az 0.0
+        ;; u = norm(cross a n)
+        ux (- (* ay nz) (* az ny))
+        uy (- (* az nx) (* ax nz))
+        uz (- (* ax ny) (* ay nx))
+        ui (/ 1.0 (math/sqrt (+ (* ux ux) (* uy uy) (* uz uz))))
+        ux (* ux ui) uy (* uy ui) uz (* uz ui)
+        ;; v = cross n u
+        vx (- (* ny uz) (* nz uy))
+        vy (- (* nz ux) (* nx uz))
+        vz (- (* nx uy) (* ny ux))
+        cu (* (math/cos r1) r2s)
+        cv (* (math/sin r1) r2s)
+        cn (math/sqrt (- 1.0 r2))
+        wx (+ (+ (* ux cu) (* vx cv)) (* nx cn))
+        wy (+ (+ (* uy cu) (* vy cv)) (* ny cn))
+        wz (+ (+ (* uz cu) (* vz cv)) (* nz cn))
+        wi (/ 1.0 (math/sqrt (+ (* wx wx) (* wy wy) (* wz wz))))]
+    (aset R 3 (* wx wi))
+    (aset R 4 (* wy wi))
+    (aset R 5 (* wz wi))))
 
-(defn radiance [sc ro rd depth]
-  (if (>= depth max-depth) [0.0 0.0 0.0]
-    (let [h (nearest sc ro rd)]
-      (if (nil? h) (sky rd)
-        (let [t (nth h 0) s (nth h 1)
-              p (v+ ro (vsc rd t))
-              n (norm (v- p (s-c s)))]
-          (if (emissive? s) (s-emit s)
-            (v+ (s-emit s)
-                (vmu (s-alb s) (radiance sc p (cosine-dir n) (inc depth))))))))))
+;; Radiance along the ray in R, into R[13..15]. Walks the path forward,
+;; recording each diffuse bounce's albedo, until it escapes to the sky, hits a
+;; light, or reaches max-depth; then folds the albedos back from the end, so
+;; L = e + albedo * L comes out in the same order the recursive version computed.
+(defn radiance! [S]
+  (let [depth (loop [d 0]
+                (if (>= d max-depth)
+                  (do (aset R 13 0.0) (aset R 14 0.0) (aset R 15 0.0) d)
+                  (let [off (nearest S)]
+                    (if (< off 0)
+                      (do (sky! (aget R 4)) d)
+                      (let [t (aget R 6)
+                            px (+ (aget R 0) (* (aget R 3) t))
+                            py (+ (aget R 1) (* (aget R 4) t))
+                            pz (+ (aget R 2) (* (aget R 5) t))]
+                        (if (> (+ (aget S (+ off 7)) (aget S (+ off 8)) (aget S (+ off 9))) 0.0)
+                          (do (aset R 13 (aget S (+ off 7)))
+                              (aset R 14 (aget S (+ off 8)))
+                              (aset R 15 (aget S (+ off 9)))
+                              d)
+                          (let [vx (- px (aget S off))
+                                vy (- py (aget S (+ off 1)))
+                                vz (- pz (aget S (+ off 2)))
+                                vi (/ 1.0 (math/sqrt (+ (* vx vx) (* vy vy) (* vz vz))))
+                                a (* 3 d)]
+                            (aset R 10 (* vx vi)) (aset R 11 (* vy vi)) (aset R 12 (* vz vi))
+                            (aset path-alb a (aget S (+ off 4)))
+                            (aset path-alb (+ a 1) (aget S (+ off 5)))
+                            (aset path-alb (+ a 2) (aget S (+ off 6)))
+                            (aset R 0 px) (aset R 1 py) (aset R 2 pz)
+                            (cosine-dir!)
+                            (recur (inc d)))))))))]
+    (loop [d (dec depth)]
+      (when (>= d 0)
+        (let [a (* 3 d)]
+          (aset R 13 (* (aget path-alb a) (aget R 13)))
+          (aset R 14 (* (aget path-alb (+ a 1)) (aget R 14)))
+          (aset R 15 (* (aget path-alb (+ a 2)) (aget R 15))))
+        (recur (dec d))))))
 
 ;; ===========================================================================
 ;; Camera + render. The camera orbits a look-at point on a circle of radius RAD
@@ -217,29 +293,38 @@
 (defn cam-pos [th hy]
   (v+ look [(* RAD (math/sin th)) (- hy (nth look 1)) (* RAD (math/cos th))]))
 
-(defn make-ray [cp px py]
-  (let [fwd (norm (v- look cp))
+;; One progressive pass: +1 jittered sample/pixel into the float accum buffer.
+;; The camera basis is the same for every pixel, so it's computed once.
+(defn render-pass [scene-idx cp accum]
+  (let [S (nth scene-arrays scene-idx)
+        fwd (norm (v- look cp))
         right (norm (cross fwd [0.0 1.0 0.0]))
         up (cross right fwd)
+        fx (nth fwd 0) fy (nth fwd 1) fz (nth fwd 2)
+        rx (nth right 0) ry (nth right 1) rz (nth right 2)
+        ux (nth up 0) uy (nth up 1) uz (nth up 2)
+        cx (nth cp 0) cy (nth cp 1) cz (nth cp 2)
         aspect (/ (float W) (float H))
-        fov 0.55
-        sx (* (- (* 2.0 (/ (+ px (rand)) (float W))) 1.0) aspect fov)
-        sy (* (- 1.0 (* 2.0 (/ (+ py (rand)) (float H)))) fov)]
-    (norm (v+ (v+ fwd (vsc right sx)) (vsc up sy)))))
-
-;; One progressive pass: +1 jittered sample/pixel into the float accum buffer.
-(defn render-pass [sc cp accum]
-  (loop [y 0]
-    (when (< y H)
-      (loop [x 0]
-        (when (< x W)
-          (let [c (radiance sc cp (make-ray cp x y) 0)
-                idx (* 3 (+ (* y W) x))]
-            (aset accum idx (+ (aget accum idx) (nth c 0)))
-            (aset accum (+ idx 1) (+ (aget accum (+ idx 1)) (nth c 1)))
-            (aset accum (+ idx 2) (+ (aget accum (+ idx 2)) (nth c 2))))
-          (recur (inc x))))
-      (recur (inc y)))))
+        fov 0.55]
+    (loop [y 0]
+      (when (< y H)
+        (loop [x 0]
+          (when (< x W)
+            (let [sx (* (- (* 2.0 (/ (+ x (rand)) (float W))) 1.0) aspect fov)
+                  sy (* (- 1.0 (* 2.0 (/ (+ y (rand)) (float H)))) fov)
+                  dx (+ (+ fx (* rx sx)) (* ux sy))
+                  dy (+ (+ fy (* ry sx)) (* uy sy))
+                  dz (+ (+ fz (* rz sx)) (* uz sy))
+                  di (/ 1.0 (math/sqrt (+ (* dx dx) (* dy dy) (* dz dz))))
+                  idx (* 3 (+ (* y W) x))]
+              (aset R 0 cx) (aset R 1 cy) (aset R 2 cz)
+              (aset R 3 (* dx di)) (aset R 4 (* dy di)) (aset R 5 (* dz di))
+              (radiance! S)
+              (aset accum idx (+ (aget accum idx) (aget R 13)))
+              (aset accum (+ idx 1) (+ (aget accum (+ idx 1)) (aget R 14)))
+              (aset accum (+ idx 2) (+ (aget accum (+ idx 2)) (aget R 15))))
+            (recur (inc x))))
+        (recur (inc y))))))
 
 (defn clampi [v] (max 0 (min 255 (int v))))
 
@@ -352,7 +437,7 @@
     (let [cp (cam-pos th hy)
           refine? (< spp max-spp)
           t0 (inst-ms (now))
-          _ (when refine? (render-pass sc cp accum))
+          _ (when refine? (render-pass scene-idx cp accum))
           spp' (if refine? (inc spp) spp)
           compute-ms (- (inst-ms (now)) t0)]
       (when refine? (show scene-idx sc cp accum spp' compute-ms))
@@ -390,7 +475,7 @@
     (loop [n 0]
       (when (< n bench-spp)
         (let [pt0 (inst-ms (now))]
-          (render-pass sc cp accum)
+          (render-pass 0 cp accum)
           (println (str "pass " (inc n) "  " (- (inst-ms (now)) pt0) "ms")))
         (recur (inc n))))
     (let [compute-ms (- (inst-ms (now)) t0)
