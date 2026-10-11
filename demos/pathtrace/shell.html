@@ -19,6 +19,11 @@
   body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
   @media (orientation: landscape) { body { justify-content: center; } }
   #app { flex: 0 0 auto; }
+  /* xterm.css gives the viewport overflow-y:scroll, which reserves a scrollbar
+     even with scrollback:0. Where scrollbars are classic (Linux, Windows, macOS
+     with a mouse) it paints a 15px bar over the image's right edge. Nothing
+     scrolls here, so hide it; !important because xterm.css loads after us. */
+  .xterm .xterm-viewport { overflow-y: hidden !important; }
   /* Touch-only ⌨ toggle: re-summons the soft keyboard so the keyboard controls
      (hjkl n r q) stay reachable on a phone. */
   #kbd-toggle {

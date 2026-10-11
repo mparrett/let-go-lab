@@ -25,6 +25,11 @@
   @media (orientation: landscape) { body { justify-content: center; } }
   /* transition eases the pop-to-bright when a freshly computed frame lands */
   #app { flex: 0 0 auto; transition: filter 0.15s ease-out; }
+  /* xterm.css gives the viewport overflow-y:scroll, which reserves a scrollbar
+     even with scrollback:0. Where scrollbars are classic (Linux, Windows, macOS
+     with a mouse) it paints a 15px bar over the image's right edge. Nothing
+     scrolls here, so hide it; !important because xterm.css loads after us. */
+  .xterm .xterm-viewport { overflow-y: hidden !important; }
   /* Touch-only ⌨ toggle (created in JS): re-summons the soft keyboard we
      suppress by default, so the keyboard controls (hjkl ,. r q) stay reachable
      on a phone. Floats over the top-right corner; .on marks it active. */
