@@ -24,7 +24,7 @@
   body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
   @media (orientation: landscape) { body { justify-content: center; } }
   /* transition eases the pop-to-bright when a freshly computed frame lands */
-  #app, #terminal { flex: 0 0 auto; transition: filter 0.15s ease-out; }
+  #app { flex: 0 0 auto; transition: filter 0.15s ease-out; }
   /* Touch-only ⌨ toggle (created in JS): re-summons the soft keyboard we
      suppress by default, so the keyboard controls (hjkl ,. r q) stay reachable
      on a phone. Floats over the top-right corner; .on marks it active. */
@@ -107,11 +107,9 @@
       };
     }
 
-    // The host page's mount is #app since let-go v1.12.0 (nooga/let-go#378,
-    // "neutral #app host mount"); v1.11.0 and earlier called it #terminal. Accept
-    // either so the demo runs on both sides of that rename — CI pins v1.11.0.
+    // The host page's mount (#app since let-go v1.12.0, nooga/let-go#378).
     function mountEl() {
-      return document.getElementById("app") || document.getElementById("terminal");
+      return document.getElementById("app");
     }
 
     let pending;

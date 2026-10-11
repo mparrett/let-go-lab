@@ -22,8 +22,8 @@ dist/native/pathtrace
 ```
 
 Builds verify the checkout's HEAD against the pin. `LETGO_NATIVE` is separate
-from the `LETGO` used by VM/browser recipes. CI and Pages retain v1.13.0 for
-the browser; a separate native CI job uses the SHA pin.
+from the `LETGO` used by VM/browser recipes. Browser CI and Pages use the
+release in `config/let-go-release`; a separate native CI job uses the SHA pin.
 
 Every invocation runs upstream's `make build`, including its smoke gates, even
 when `bin/lg` exists. Go's build cache avoids unchanged compilation, while the
@@ -33,7 +33,7 @@ runtime cache and generated build outputs.
 
 Mandelbrot needs a sixel terminal for interactive output; pathtrace uses the
 iTerm2 inline-image protocol. Piped/headless runs execute each demo's benchmark.
-Pathtrace's headless PNG writer needs `openssl` on PATH. Microgpt reads its data
+Microgpt reads its data
 and weights relative to the working directory:
 
 ```sh
