@@ -15,7 +15,8 @@ just serve           # build + serve in the browser; open the printed URL
 ```
 
 Both default to the `mandelbrot` demo and to the lg in the symlinked checkout
-(`./let-go`) — use **let-go ≥ 1.11.0**, and prefer the tag CI pins. See
+(`./let-go`) — use the let-go release pinned in
+[`config/let-go-release`](config/let-go-release). See
 [CLAUDE.md](CLAUDE.md) for the lg requirement, cert setup for LAN/phone serving,
 and how to add a demo.
 
@@ -28,7 +29,7 @@ dist/native/mandelbrot
 
 This optional build caches the audited let-go SHA from
 [`config/let-go-native.sha`](config/let-go-native.sha). Browser CI and Pages
-continue to use v1.13.0. See [native builds](docs/native-builds.md) for requirements,
+use the release pin. See [native builds](docs/native-builds.md) for requirements,
 measurements, and compiler limitations.
 
 ## Demos

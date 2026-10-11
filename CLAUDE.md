@@ -33,20 +33,15 @@ browser/Pages release pin. Set `LETGO_NATIVE=/path/to/checkout` to reuse a check
 of that exact SHA. Native builds and parity tests have a separate CI job; see
 [docs/native-builds.md](docs/native-builds.md) when updating the native pin.
 
-The demos need an lg carrying the client-owned shell (the `-w-shell` flag, #245)
-and SGR mouse input (#313). **let-go ≥ 1.11.0** is the floor — the first tagged
-release with both, plus the IR/lowering perf gains the sixel encoder benefits
-from. A newer `main` works too. The build path feature-probes for `-w-shell`,
-failing clearly if it's absent.
-
-**CI pins `v1.13.0`** (`.github/workflows/ci.yml`), and that is the version the
-demos are actually verified against — bump the pin toward the newest release
-rather than holding it at the floor. Holding it at v1.11.0 is what let
-nooga/let-go#378 (wasm host mount `#terminal` → `#app`, v1.12.0) break both
-browser demos for two minor versions with CI green. The shells accept either
-mount id, so the 1.11.0 floor still stands, but only the pinned version is
-tested. Note the pin also fixes the Go toolchain: v1.13.0's `go.mod` needs Go
-1.27, so bumping one means bumping `go-version` too.
+**The supported let-go is the release in `config/let-go-release`.** Browser CI
+and Pages build exactly that tag, and it is the only version the demos are
+tested against — there is no separate, older floor. Docs point at the file
+rather than naming a version, so a bump is a one-line change; CI takes the Go
+toolchain from that release's `go.mod`. Keep it at a recent release: holding CI
+at the oldest supported version is what let nooga/let-go#378 (wasm host mount
+`#terminal` → `#app`, v1.12.0) break both browser demos for two minor versions
+with CI green. A newer `main` usually works too. The build path feature-probes
+for `-w-shell`, failing clearly if it's absent.
 
 `lg` itself is resolved by `scripts/lib/lg-path.sh`, which prefers `$LETGO/bin/lg`
 (upstream's promoted copy) over a leftover `$LETGO/lg` at the checkout root.

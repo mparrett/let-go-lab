@@ -22,18 +22,17 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-env:
-  # Pinned let-go RELEASE — same bump process as ci.yml, and keep the two in step.
-  # The lab never builds lg itself; it runs a stock upstream build.
-  #
-  # Was 5ba842f5 (2026-06-27) until 2026-09-19: a floating commit, three months
-  # stale, and the same drift trap ci.yml's pin was. Tags are bumpable on
-  # purpose; a SHA nobody revisits is not.
-  #
-  # Validated 2026-09-19 against v1.13.0 by building _site/ locally and serving
-  # it over plain HTTP (no COOP/COEP) so the coi-serviceworker path is the one
-  # exercised: renders identically to the headered build.
-  LETGO_PIN: v1.13.0
+# The let-go release is pinned in config/let-go-release, shared with ci.yml (see
+# the bump process there). The lab never builds lg itself; it runs a stock
+# upstream build.
+#
+# Was 5ba842f5 (2026-06-27) until 2026-09-19: a floating commit, three months
+# stale, and the same drift trap ci.yml's pin was. Tags are bumpable on purpose;
+# a SHA nobody revisits is not.
+#
+# v1.13.0 validated 2026-09-19 by building _site/ locally and serving it over
+# plain HTTP (no COOP/COEP) so the coi-serviceworker path is the one exercised:
+# renders identically to the headered build.
 
 jobs:
   build:
@@ -42,18 +41,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Cloned before setup-go so the toolchain comes from the pinned go.mod.
+      - name: Fetch let-go (pinned release)
+        run: |
+          git clone https://github.com/nooga/let-go let-go-upstream
+          git -C let-go-upstream checkout "$(cat config/let-go-release)"
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version-file: let-go-upstream/go.mod
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Build let-go (pinned upstream)
+      - name: Build let-go (pinned release)
         run: |
-          git clone https://github.com/nooga/let-go let-go-upstream
-          git -C let-go-upstream checkout "$LETGO_PIN"
           make -C let-go-upstream build
           ln -sfn "$PWD/let-go-upstream" let-go
           . scripts/lib/lg-path.sh

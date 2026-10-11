@@ -18,7 +18,7 @@
   html, body { background: #000; margin: 0; height: 100%; }
   body { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; }
   @media (orientation: landscape) { body { justify-content: center; } }
-  #app, #terminal { flex: 0 0 auto; }
+  #app { flex: 0 0 auto; }
   /* Touch-only ⌨ toggle: re-summons the soft keyboard so the keyboard controls
      (hjkl n r q) stay reachable on a phone. */
   #kbd-toggle {
@@ -75,11 +75,9 @@
       };
     }
 
-    // The host page's mount is #app since let-go v1.12.0 (nooga/let-go#378,
-    // "neutral #app host mount"); v1.11.0 and earlier called it #terminal. Accept
-    // either so the demo runs on both sides of that rename — CI pins v1.11.0.
+    // The host page's mount (#app since let-go v1.12.0, nooga/let-go#378).
     function mountEl() {
-      return document.getElementById("app") || document.getElementById("terminal");
+      return document.getElementById("app");
     }
 
     let pending;

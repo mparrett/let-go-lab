@@ -5,9 +5,8 @@
 ;; addon; iTerm2 IIP is, by default). The same escape shows the image in iTerm2
 ;; natively. base64 is the transport, which matters: a let-go String is UTF-8, so
 ;; bytes >127 cannot be placed into one without corruption — base64 keeps every
-;; emitted byte in 0..127. Native non-iTerm / headless runs decode the same base64
-;; to a real out.png via `openssl` (a raw byte file likewise can't be built as a
-;; String, so we hand the bytes to a decoder).
+;; emitted byte in 0..127. Native non-iTerm / headless runs write the PNG bytes
+;; to a real out.png with `spit` on a byte-array.
 ;;
 ;; Pipeline per frame: trace +1 sample/pixel into a float accumulation buffer ->
 ;; tone-map the running average to 8-bit RGB -> encode-png -> base64 -> iTerm2
@@ -100,33 +99,9 @@
                                (chunk-bytes "IDAT" idat))
                         (chunk-bytes "IEND" [])))))
 
-;; base64 over a byte vector -> ASCII string. base64-slow is the pure-let-go
-;; encoder; `base64` below prefers a native builtin when the runtime has one.
-(def b64-alpha
-  (mapv int "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"))
-(defn base64-slow [b]
-  (let [n (count b)]
-    (loop [i 0 acc (transient [])]
-      (if (>= i n) (apply str (map char (persistent! acc)))
-        (let [b0 (nth b i)
-              b1 (if (< (+ i 1) n) (nth b (+ i 1)) 0)
-              b2 (if (< (+ i 2) n) (nth b (+ i 2)) 0)
-              tr (bit-or (bit-or (bit-shift-left b0 16) (bit-shift-left b1 8)) b2)]
-          (recur (+ i 3)
-                 (-> acc
-                     (conj! (nth b64-alpha (bit-and (bit-shift-right tr 18) 63)))
-                     (conj! (nth b64-alpha (bit-and (bit-shift-right tr 12) 63)))
-                     (conj! (if (< (+ i 1) n) (nth b64-alpha (bit-and (bit-shift-right tr 6) 63)) 61))
-                     (conj! (if (< (+ i 2) n) (nth b64-alpha (bit-and tr 63)) 61)))))))))
-
-;; Prefer the native base64-encode builtin when present (let-go past the v1.11.0
-;; floor); `resolve` returns nil on older lg, so this degrades to the let-go encoder
-;; with no load-time dependency on the symbol. The PNG bytes are a vector of ints;
-;; the native fn takes a byte-array. In-browser wasm this is the slow part of the
-;; per-frame encode, so the native path is a real win there.
-(def native-base64 (resolve 'base64-encode))
-(defn base64 [b]
-  (if native-base64 (native-base64 (byte-array b)) (base64-slow b)))
+;; base64 over a byte vector -> ASCII string. The PNG bytes are a vector of ints;
+;; the builtin takes a byte-array.
+(defn base64 [b] (base64-encode (byte-array b)))
 
 ;; ===========================================================================
 ;; vec3 — plain 3-element vectors. Hot path; kept allocation-lean.
@@ -291,19 +266,10 @@
        ";width=" (* W DISP) "px;height=" (* H DISP) "px;preserveAspectRatio=1:"
        b64 (char 7)))
 
-;; Native/headless artifact: write a real out.png. Fast path: spit the bytes
-;; directly — works where `spit` accepts a byte-array (let-go past the v1.11.0
-;; floor; see the byte-output change). Fallback for older runtimes, where a String
-;; is UTF-8 and can't carry bytes >127: base64 it and let `openssl` decode to disk.
-;; Returns true on success.
-(defn write-png-file [path png-bytes b64]
-  (if (try (do (spit path (byte-array png-bytes)) true) (catch e false))
-    true
-    (let [tmp (str path ".b64")]
-      (spit tmp b64)
-      (let [r (os/sh "openssl" "base64" "-d" "-A" "-in" tmp "-out" path)]
-        (try (os/sh "rm" "-f" tmp) (catch e nil))
-        (= (:exit r) 0)))))
+;; Native/headless artifact: write a real out.png. `spit` writes a byte-array
+;; verbatim.
+(defn write-png-file [path png-bytes]
+  (spit path (byte-array png-bytes)))
 
 ;; ===========================================================================
 ;; Interaction (mirrors mandelbrot's setup!/teardown!/loop-keys shape)
@@ -431,12 +397,12 @@
           et0 (inst-ms (now))
           fb (tonemap accum bench-spp)
           png (encode-png W H fb)
-          b64 (base64 png)
-          encode-ms (- (inst-ms (now)) et0)
-          ok (write-png-file "out.png" png b64)]
+          _ (base64 png)              ; time the full per-frame encode
+          encode-ms (- (inst-ms (now)) et0)]
+      (write-png-file "out.png" png)
       (println (str "total compute " compute-ms "ms · encode " encode-ms "ms · png "
                     (count png) " bytes"))
-      (println (if ok "wrote out.png" "out.png decode failed (is openssl on PATH?)")))))
+      (println "wrote out.png"))))
 
 (defn -main []
   (set-rand-seed! 1)
