@@ -4,6 +4,7 @@ correct complex-plane point at both a narrow (390px) and a desktop viewport.
 
 Drives the served browser bundle with Playwright. For each viewport it asserts:
   - no horizontal overflow (the terminal box fits the viewport width),
+  - no scrollbar on the xterm viewport (Chromium runs with scrollbars drawn),
   - the program adapted SCALE (smaller on the phone, 3 on desktop),
   - no console/page errors,
   - a center click keeps the center x within one cell and zooms in,
@@ -71,7 +72,9 @@ def new_page(p, w, h):
     """Launch a chromium page at the given viewport with error capture wired and
     the document loaded. Returns (page, errs); errs accumulates pageerror +
     console-error text for the caller to assert on."""
-    pg = p.chromium.launch().new_context(viewport={"width": w, "height": h}).new_page()
+    # Headless Chromium hides scrollbars by default; draw them so a classic
+    # scrollbar over the terminal shows up as a measurable gutter.
+    pg = p.chromium.launch(ignore_default_args=["--hide-scrollbars"]).new_context(viewport={"width": w, "height": h}).new_page()
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
@@ -108,8 +111,11 @@ def check_viewport(p, tag, w, h, want_scale):
         "() => {const el=document.getElementById('app')||document.getElementById('terminal');"
         "const r=el.getBoundingClientRect();"
         "return {scale:window.__lgScale, grid:window.__lgGrid, termW:Math.round(r.width), "
-        "vpW:window.innerWidth, overflowX:Math.round(r.width)>window.innerWidth+1};}"
+        "vpW:window.innerWidth, overflowX:Math.round(r.width)>window.innerWidth+1, "
+        "gutter:(v=>v?v.offsetWidth-v.clientWidth:0)(document.querySelector('.xterm-viewport'))};}"
     )
+    if info["gutter"]:
+        fails.append(f"{tag}: {info['gutter']}px scrollbar on the xterm viewport")
     if info["overflowX"]:
         fails.append(f"{tag}: terminal {info['termW']}px overflows viewport {info['vpW']}px (clipped)")
     if info["scale"] != want_scale:
