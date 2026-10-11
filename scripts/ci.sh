@@ -100,6 +100,34 @@ else
     echo "FAIL: server did not come up"; fails=$((fails + 1)); cat /tmp/ci-serve.log
   fi
   kill "$serve_pid" 2>/dev/null || true
+  wait "$serve_pid" 2>/dev/null || true   # free the port before the next group
+fi
+
+group "build + browser viewport/click, sixel page"
+if [[ ! -f test/viewport_fit_sixel_test.py ]]; then
+  absent "viewport-sixel" "test/viewport_fit_sixel_test.py not present"
+elif [[ ! -x "$LG" ]]; then
+  absent "viewport-sixel" "no lg at $LG"
+else
+  # The same program as the canvas page, in xterm.js: it never attaches a canvas
+  # sink, so it draws sixel (scale handshake, terminal-cell clicks).
+  scripts/serve.sh mandelbrot-sixel --http --port "$PORT" > /tmp/ci-serve-sixel.log 2>&1 &
+  serve_pid=$!
+  up=0
+  for _ in $(seq 1 150); do
+    if curl -fsS "http://localhost:$PORT/" >/dev/null 2>&1; then up=1; break; fi
+    sleep 1
+  done
+  if [[ "$up" == 1 ]]; then
+    python3 test/viewport_fit_sixel_test.py "http://localhost:$PORT/"; rc=$?
+    if [[ "$rc" -eq 0 ]]; then echo "PASS: viewport-fit-sixel"
+    elif [[ "$rc" -eq 77 ]]; then absent "viewport-fit-sixel" "playwright not installed"
+    else echo "FAIL: viewport-fit-sixel"; fails=$((fails + 1)); fi
+  else
+    echo "FAIL: sixel server did not come up"; fails=$((fails + 1)); cat /tmp/ci-serve-sixel.log
+  fi
+  kill "$serve_pid" 2>/dev/null || true
+  wait "$serve_pid" 2>/dev/null || true   # free the port before the next group
 fi
 
 group "microgpt Pages (header-free project subpath)"

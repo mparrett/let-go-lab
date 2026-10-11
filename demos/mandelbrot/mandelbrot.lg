@@ -23,6 +23,12 @@
 
 (def ESC "")
 
+;; Wall-clock milliseconds for the timing readouts. (inst-ms (now)) would
+;; read the same clock, but under TinyGo it fails on the first call before let-go
+;; with nooga/let-go#1054 (TinyGo can't call time.Time.UnixMilli by reflection),
+;; and the browser builds use TinyGo.
+(defn now-ms [] (System/currentTimeMillis))
+
 ;; --- Render parameters ---------------------------------------------------
 ;; SPEED LEVER: the cost is one escape() call per *computed* pixel. We compute
 ;; a coarse CW×CH grid, then upscale each computed pixel into a SCALE×SCALE
@@ -175,53 +181,71 @@
     (>= len 4) (conj acc "!" (str len) (sixchar m))
     :else (conj acc (apply str (repeat len (sixchar m))))))
 
-;; RLE one color's full row (a vector of `width` masks) into a sixel string.
-;; The run compares raw masks (ints), not their chars — an integer = instead of
-;; a string =, and only one sixchar per run at the boundary. cur=-1 primes the
-;; loop (no real mask is negative), so the first cell always opens a fresh run.
-(defn rle-row [row width]
-  (loop [gx 0 cur -1 run 0 acc []]
-    (if (>= gx width)
-      (apply str (emit-run acc cur run))
-      (let [m (nth row gx)]
+;; RLE one colour's row of CW masks, read from `masks` at `off`, into a sixel
+;; string. The masks are per grid column; each grid column is `scale` sixel
+;; columns wide, so a run of n equal masks is a run of n*scale on screen. Runs
+;; are maximal in both, so this emits exactly what RLE over the full-width row
+;; would. The run compares raw masks (ints), not their chars, and calls sixchar
+;; once per run. cur=-1 primes the loop (no real mask is negative).
+(defn rle-row [masks off scale]
+  (loop [i 0 cur -1 run 0 acc []]
+    (if (>= i CW)
+      (apply str (emit-run acc cur (* run scale)))
+      (let [m (aget masks (+ off i))]
         (if (= m cur)
-          (recur (inc gx) cur (inc run) acc)
-          (recur (inc gx) m 1 (emit-run acc cur run)))))))
+          (recur (inc i) cur (inc run) acc)
+          (recur (inc i) m 1 (emit-run acc cur (* run scale))))))))
 
-;; One 6px display band, SINGLE PASS: read each of the band's 6×WIDTH cells once
-;; and route each cell's bit into its color's transient row buffer, then RLE each
-;; row. The multi-pass predecessor re-read every cell once per color (~16× on a
-;; ~15-colour band); this touches each cell once. Color iteration order differs
-;; from a set scan, but per-color rows and total bytes are identical (each pixel
-;; has exactly one colour; overlay is commutative).
+;; Band scratch, reused across bands and frames: one row of CW masks per palette
+;; register (register c's row starts at c*CW), plus a used flag per register.
+;; Rows a band touched are zeroed again after they're emitted, so the buffer is
+;; all zeros between bands.
+(def band-masks (int-array (* (inc NPAL) CW)))
+(def band-used (int-array (inc NPAL)))
+
+;; The grid rows a 6px band covers, each with the sixel bits it fills: at scale
+;; 3 a band spans 2 grid rows, bits 0b000111 and 0b111000.
+(defn band-rows [b scale]
+  (loop [r 0 acc []]
+    (if (>= r 6)
+      acc
+      (let [g (quot (+ (* b 6) r) scale)
+            bit (bit-shift-left 1 r)
+            lst (peek acc)]
+        (recur (inc r)
+               (if (and lst (= (first lst) g))
+                 (conj (pop acc) [g (bit-or (second lst) bit)])
+                 (conj acc [g bit])))))))
+
+;; One 6px display band. Each grid cell under the band is read once and its
+;; bits are OR-ed into its colour's row; then every colour the band used is
+;; RLE-encoded, in register order. Each pixel has exactly one colour, so the
+;; rows overlay to the same image whatever order they come in.
 (defn encode-band [grid b scale width]
-  (let [y0 (* b 6)
-        ;; Division hoist: the old per-cell grid-at did two `quot`s for each of
-        ;; the 6×width reads. The grid-row base depends only on the sub-row r
-        ;; (6 values per band) and the grid column only on gx — so precompute the
-        ;; 6 row bases once, and divide gx once per column instead of 6×.
-        row-base (mapv (fn [r] (* (quot (+ y0 r) scale) CW)) (range 6))
-        rows (loop [gx 0 rws (transient {})]
-               (if (>= gx width)
-                 rws
-                 (let [gxq (quot gx scale)]
-                   (recur (inc gx)
-                     (loop [r 0 m rws]
-                       (if (>= r 6)
-                         m
-                         (let [c   (nth grid (+ (nth row-base r) gxq))
-                               bit (bit-shift-left 1 r)
-                               tv  (or (get m c) (transient (vec (repeat width 0))))
-                               tv  (assoc! tv gx (bit-or (nth tv gx) bit))]
-                           (recur (inc r) (assoc! m c tv)))))))))
-        prows (persistent! rows)
-        pieces (loop [cs (seq prows) acc []]
-                 (if (empty? cs)
-                   acc
-                   (let [e (first cs)]
-                     (recur (rest cs)
-                            (conj acc "#" (str (first e)) (rle-row (persistent! (second e)) width) "$")))))]
-    (str (apply str pieces) "-")))
+  (let [masks band-masks
+        used band-used]
+    (doseq [[g bits] (band-rows b scale)]
+      (let [base (* g CW)]
+        (loop [i 0]
+          (when (< i CW)
+            (let [c (nth grid (+ base i))
+                  k (+ (* c CW) i)]
+              (aset masks k (bit-or (aget masks k) bits))
+              (aset used c 1)
+              (recur (inc i)))))))
+    (loop [c 0 acc []]
+      (if (> c NPAL)
+        (str (apply str acc) "-")
+        (if (= 0 (aget used c))
+          (recur (inc c) acc)
+          (let [off (* c CW)
+                row (rle-row masks off scale)]
+            (aset used c 0)
+            (loop [i 0]
+              (when (< i CW)
+                (aset masks (+ off i) 0)
+                (recur (inc i))))
+            (recur (inc c) (conj acc "#" (str c) row "$"))))))))
 
 ;; Kept short enough to stay on one line at the fitted terminal width — a
 ;; longer line wraps and litters row 2 (where the image starts).
@@ -293,11 +317,11 @@
   (term/move-cursor COL0 3)               ; coords row (status row 2)
   (term/write "computing…                          ")
   (term/flush)
-  (let [t0 (inst-ms (now))
+  (let [t0 (now-ms)
         gi (compute-grid cx cy vw mi)
         grid (first gi)
         iters (second gi)
-        t1 (inst-ms (now))
+        t1 (now-ms)
         width (img-w scale)
         height (img-h scale)
         bands (quot height 6)]
@@ -323,10 +347,48 @@
     ;; bottom-status FIRST — it writes at the cursor just below the image
     ;; (relative). status SECOND/last, so it still overwrites the "computing…"
     ;; marker on the coords row up top.
-    (bottom-status mi iters (- t1 t0) (- (inst-ms (now)) t1) scale)
+    (bottom-status mi iters (- t1 t0) (- (now-ms) t1) scale)
     (status cx cy vw)
     (rendered-scale-cue scale)
     (term/flush)))
+
+;; In the browser the frame goes to a <canvas> through surface/present, one
+;; pixel per grid point (the page scales it up), and the status to the page
+;; through js/emit. No sixel is built, so there's no encode or emit phase.
+;; palette-rgb holds each register's colour as bytes, 3 per register, from the
+;; same cosine palette as palette-defs (which is in percent).
+(def palette-rgb
+  (let [t (make-array :int (* 3 (inc NPAL)))
+        b (fn [pct] (int (+ 0.5 (* 2.55 pct))))]
+    (loop [i 0]                                 ; register 0 stays black
+      (when (< i NPAL)
+        (let [f (/ (float i) (float NPAL)) o (* 3 (inc i))]
+          (aset t o (b (iq f 0.0)))
+          (aset t (+ o 1) (b (iq f 0.33)))
+          (aset t (+ o 2) (b (iq f 0.67))))
+        (recur (inc i))))
+    t))
+
+(defn render-canvas [cx cy vw mi]
+  (js/emit :busy {:on true})                   ; the page dims the old frame meanwhile
+  (let [t0 (now-ms)
+        gi (compute-grid cx cy vw mi)
+        grid (first gi)
+        t1 (now-ms)
+        n (* CW CH)
+        fb (make-array :byte (* 4 n))]
+    (loop [i 0]
+      (when (< i n)
+        (let [c (* 3 (nth grid i)) o (* 4 i)]
+          (aset fb o (aget palette-rgb c))
+          (aset fb (+ o 1) (aget palette-rgb (+ c 1)))
+          (aset fb (+ o 2) (aget palette-rgb (+ c 2)))
+          (aset fb (+ o 3) 255))
+        (recur (inc i))))
+    (surface/present fb CW CH)
+    (js/emit :status {:x (r5 cx) :y (r5 cy) :zoom (int (/ home-w vw)) :vw vw :maxiter mi
+                      :iters (second gi) :w CW :h CH
+                      :compute (- t1 t0) :present (- (now-ms) t1)})))
 
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
 (def up (str ESC "[A"))
@@ -422,6 +484,20 @@
         img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
         img-rows (max 1 (- rows CHROME-ROWS))]
     (map-click cx cy vw mx my img-cols img-rows)))
+
+;; CANVAS path: the browser page draws the frame on a <canvas> and reports a
+;; click as an SGR mouse string whose x/y are 1-based positions on a grid
+;; click-res times finer than the coarse grid (640x480 for 160x120), so the
+;; mapping needs no terminal geometry at all. Returns [cx' cy'] or nil.
+(def click-res 4)
+(defn canvas-click->center [cx cy vw mx my]
+  (let [w (* CW click-res) h (* CH click-res)]
+    (when (and (<= 1 mx w) (<= 1 my h))
+      (let [vh (* vw (/ (float CH) (float CW)))
+            fx (/ (+ (float (dec mx)) 0.5) (float w))
+            fy (/ (+ (float (dec my)) 0.5) (float h))]
+        [(+ (- cx (/ vw 2.0)) (* fx vw))
+         (+ (- cy (/ vh 2.0)) (* fy vh))]))))
 
 ;; --- Native cell-size probe (issue #5) -------------------------------------
 ;; Mapping a NATIVE click needs the terminal's cell size in PIXELS: a sixel is
@@ -546,10 +622,10 @@
     (let [n (parse-int (subs k 1 2))]
       (when n (max scale-min (min scale-max n))))))
 
-(defn loop-keys [init-scale]
+(defn loop-keys [init-scale canvas?]
   (let [[x0 y0 w0 mi0] (start-view)]
     (loop [cx x0 cy y0 vw w0 mi mi0 scale init-scale]
-      (render cx cy vw mi scale)
+      (if canvas? (render-canvas cx cy vw mi) (render cx cy vw mi scale))
       (let [k (term/read-key)
             pan (* vw 0.2)
             me (mouse-event k)
@@ -579,10 +655,11 @@
           ;; native with no measurable cell size — is ignored, leaving keyboard
           ;; pan/zoom as the fallback.
           (and me (= (:action me) :press) (= (:button me) :left))
-          (let [c (if (:native me)
-                    (let [cell (cell-size)]
-                      (when cell (native-click->center cx cy vw (:x me) (:y me) cell)))
-                    (click->center cx cy vw (:x me) (:y me)))]
+          (let [c (cond
+                    (:native me) (let [cell (cell-size)]
+                                   (when cell (native-click->center cx cy vw (:x me) (:y me) cell)))
+                    canvas? (canvas-click->center cx cy vw (:x me) (:y me))
+                    :else (click->center cx cy vw (:x me) (:y me)))]
             (if c
               (let [px (first c) py (second c)
                     vh (* vw (/ (float CH) (float CW)))
@@ -619,11 +696,11 @@
                 " scale " home-scale " maxiter " home-maxiter " (no TTY)"))
   (loop [n 0]
     (when (< n bench-frames)
-      (let [t0 (inst-ms (now))
+      (let [t0 (now-ms)
             gi (compute-grid home-x home-y home-w home-maxiter)
-            t1 (inst-ms (now))
+            t1 (now-ms)
             s  (build-frame (first gi) home-scale)
-            t2 (inst-ms (now))
+            t2 (now-ms)
             compute-ms (- t1 t0)
             ips (if (> compute-ms 0) (quot (* (second gi) 1000) compute-ms) 0)]
         (println (str "frame " n "  compute=" compute-ms "ms  encode=" (- t2 t1)
@@ -654,15 +731,18 @@
   ;; term/size is nil only on a non-TTY native run (piped/redirected); under
   ;; wasm it always returns a value. So: interactive on a TTY (or wasm), and
   ;; the headless bench when piped — which is exactly the profiling invocation.
-  (if (nil? (term/size))
-    (run-bench)
-    (do
-      (setup!)
-      (try
-        (announce-geometry)
-        ;; Browser waits for the shell's fitted scale; native holds home-scale.
-        (loop-keys (if *in-wasm* (await-initial-scale) home-scale))
-        (finally (teardown!))))))
+  (cond
+    ;; Browser: the canvas page; no terminal, no sixel, no scale handshake.
+    (surface/available?) (loop-keys home-scale true)
+    (nil? (term/size)) (run-bench)
+    :else (do
+            (setup!)
+            (try
+              (announce-geometry)
+              ;; A browser without the surface seam waits for the shell's fitted
+              ;; scale; native holds home-scale.
+              (loop-keys (if *in-wasm* (await-initial-scale) home-scale) false)
+              (finally (teardown!))))))
 
 (when-not *compiling-aot*
   (-main))

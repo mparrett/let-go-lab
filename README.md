@@ -10,7 +10,7 @@ every demo is on [the lab's index page](https://matt.parrett.us/let-go-lab/):
 [ptcanvas](https://matt.parrett.us/let-go-lab/ptcanvas/) ·
 [microgpt sampler](https://matt.parrett.us/let-go-lab/microgpt/).
 
-![Mandelbrot sixel demo running in the browser via xterm.js](docs/img/mandelbrot-browser.png)
+![Mandelbrot demo running in the browser, drawn to a canvas](docs/img/mandelbrot-browser.png)
 
 ## Quick start
 
@@ -39,17 +39,21 @@ measurements, and compiler limitations.
 
 ## Demos
 
-- **mandelbrot** — an escape-time Mandelbrot rendered as sixel graphics in
-  xterm.js (and any sixel-capable native terminal): interactive zoom / pan /
-  maxiter, tap-to-recenter (a central tap zooms, an edge tap pans), a
-  dim-while-computing cue, live phase timing, and a single-pass sixel encoder.
+- **mandelbrot** — an escape-time Mandelbrot. In the browser it draws to a
+  `<canvas>` (`surface/present`), sized to the window; in a terminal it draws
+  sixel graphics. Interactive zoom / pan / maxiter, tap-to-recenter (a central
+  tap zooms, an edge tap pans), a dim-while-computing cue, live phase timing,
+  and a sixel encoder that works from the coarse grid.
 
   Controls: `+/-` zoom · `hjkl` / arrows pan · `,/.` maxiter · `r` reset ·
   `q` quit · wheel to zoom. Click/tap to recenter — a central tap zooms in, an
   edge tap only pans (shift+click zooms out) —
-  exact in the browser (the shell content-sizes the terminal), and native too
-  where the terminal's cell size can be measured (under tmux, or a terminal that
-  answers the xterm window-ops), with keyboard pan/zoom as the fallback.
+  exact in the browser (taps map straight to the canvas), and native too where
+  the terminal's cell size can be measured (under tmux, or a terminal that
+  answers the xterm window-ops), with keyboard pan/zoom as the fallback. The
+  browser page adds buttons for touch. The same program also runs in the
+  browser as sixel in xterm.js (`demos/mandelbrot-sixel`, at
+  `/mandelbrot-sixel/` on Pages).
 
   The same `.lg` runs natively in any sixel-capable terminal (`just play`):
 

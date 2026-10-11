@@ -8,7 +8,8 @@ from the let-go runtime repo so experiments don't churn it.
 ## Layout
 
 ```
-demos/<name>/        one experiment each: <name>.lg + shell.html (its browser shell)
+demos/<name>/        one experiment each: <name>.lg + shell.html (its browser shell);
+                       mandelbrot-sixel/ reuses mandelbrot.lg (symlink) with an xterm shell
 harness/             reusable browser-shell-for-lg backbone:
                        inject-shell.sh  — bake a client shell into a `lg -w` bundle
                        inline-assets.sh — inline vendored xterm into the shell (offline)
@@ -42,6 +43,13 @@ at the oldest supported version is what let nooga/let-go#378 (wasm host mount
 `#terminal` → `#app`, v1.12.0) break both browser demos for two minor versions
 with CI green. A newer `main` usually works too. The build path feature-probes
 for `-w-shell`, failing clearly if it's absent.
+
+The canvas pages (mandelbrot, pathtrace, ptcanvas) draw with `surface/present`
+(#572, in releases since v1.13.0). In the browser a program picks canvas or
+terminal output with `surface/available?`, which is true only once the page
+attaches a canvas sink (`LetGoHost.onSurface`). That is how
+`demos/mandelbrot-sixel`, a symlink to the same `mandelbrot.lg` with the xterm
+shell, draws sixel: it never attaches one.
 
 `lg` itself is resolved by `scripts/lib/lg-path.sh`, which prefers `$LETGO/bin/lg`
 (upstream's promoted copy) over a leftover `$LETGO/lg` at the checkout root.
