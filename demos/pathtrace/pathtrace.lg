@@ -340,6 +340,33 @@
         (recur (inc i))))
     fb))
 
+;; The same tone curve into an RGBA buffer, for the browser canvas
+;; (surface/present takes w*h*4 bytes). The gamma step reads a table instead of
+;; calling math/pow per channel: m is in [0, 1), and 4096 steps of it map to
+;; bytes within one 8-bit step of the exact curve.
+(def gamma-lut
+  (let [t (make-array :int 4096)]
+    (loop [i 0]
+      (when (< i 4096)
+        (aset t i (clampi (* 255.0 (math/pow (/ (float i) 4095.0) (/ 1.0 2.2)))))
+        (recur (inc i))))
+    t))
+
+(defn tonemap-rgba [accum spp]
+  (let [n (* W H) fb (make-array :byte (* n 4)) inv (/ 1.0 (float spp))]
+    (loop [i 0]
+      (when (< i n)
+        (let [a (* 3 i) o (* 4 i)]
+          (loop [k 0]
+            (when (< k 3)
+              (let [v (* (aget accum (+ a k)) inv)
+                    m (/ v (+ 1.0 v))]
+                (aset fb (+ o k) (aget gamma-lut (int (* m 4095.0)))))
+              (recur (inc k))))
+          (aset fb (+ o 3) 255))
+        (recur (inc i))))
+    fb))
+
 ;; ===========================================================================
 ;; Display + disk output
 ;; ===========================================================================
@@ -394,14 +421,24 @@
   (term/move-cursor COL0 4)
   (term/write (str "hjkl·orbit n·scene r·reset q·quit" CLEAR-EOL)))
 
-;; Render the current accumulation to an inline image at (COL0, IMG-ROW0), with a
-;; bottom timing bar written relative to where the image left the cursor. Each
-;; pass is one synchronized-output frame (DEC 2026): a terminal that supports it
-;; shows the status, image and bar together; others ignore the mode.
+;; In a terminal (show-terminal), the accumulation goes out as an inline image at
+;; (COL0, IMG-ROW0), with a bottom timing bar written relative to where the image
+;; left the cursor. Each pass is one synchronized-output frame (DEC 2026): a
+;; terminal that supports it shows the status, image and bar together; others
+;; ignore the mode.
 (def begin-sync (str ESC "[?2026h"))
 (def end-sync (str ESC "[?2026l"))
 
-(defn show [scene-idx sc cp accum spp compute-ms]
+;; In the browser the frame goes to a <canvas> (surface/present) and the status
+;; to the page (js/emit); the page draws both. No PNG, no base64, no escape.
+(defn show-canvas [scene-idx accum spp compute-ms]
+  (let [t0 (inst-ms (now))
+        fb (tonemap-rgba accum spp)]
+    (surface/present fb W H)
+    (js/emit :status {:scene scene-idx :spp spp :w W :h H
+                      :compute compute-ms :present (- (inst-ms (now)) t0)})))
+
+(defn show-terminal [scene-idx accum spp compute-ms]
   (let [t0 (inst-ms (now))
         fb (tonemap accum spp)
         png (encode-png W H fb)
@@ -415,6 +452,11 @@
     (term/write (str "\r\n " "compute " compute-ms "ms · encode " encode-ms "ms /pass" CLEAR-EOL))
     (term/write end-sync)
     (term/flush)))
+
+(defn show [scene-idx sc cp accum spp compute-ms]
+  (if (surface/available?)
+    (show-canvas scene-idx accum spp compute-ms)
+    (show-terminal scene-idx accum spp compute-ms)))
 
 ;; Arrow keys (CSI) as orbit aliases for hjkl.
 (def up (str ESC "[A")) (def down (str ESC "[B"))
@@ -491,14 +533,15 @@
 
 (defn -main []
   (set-rand-seed! 1)
-  (if (nil? (term/size))
-    (run-bench)
-    (do
-      (setup!)
-      (try
-        (announce-geometry)
-        (loop-keys (start-scene))
-        (finally (teardown!))))))
+  (cond
+    (surface/available?) (loop-keys (start-scene))   ; browser: canvas page, no terminal
+    (nil? (term/size)) (run-bench)
+    :else (do
+            (setup!)
+            (try
+              (announce-geometry)
+              (loop-keys (start-scene))
+              (finally (teardown!))))))
 
 (when-not *compiling-aot*
   (-main))
