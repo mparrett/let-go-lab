@@ -80,11 +80,15 @@ cert it falls back to localhost HTTP.
 
 ## Deploy (GitHub Pages)
 
-`.github/workflows/pages.yml` builds mandelbrot at the root and the pretrained
-microgpt sampler at `/microgpt/`, and publishes them to
-https://mparrett.github.io/let-go-lab/ on push to `main`. `scripts/build-pages.sh`
-assembles `_site/` (offline single-file bundle + `coi-serviceworker.js` +
-`.nojekyll`). Pages can't send COOP/COEP, which the `SharedArrayBuffer` input
+`.github/workflows/pages.yml` builds every browser demo into its own directory
+(`/mandelbrot/`, `/pathtrace/`, `/ptcanvas/`, plus the pretrained microgpt sampler at
+`/microgpt/`) under an index page, and publishes them to
+https://matt.parrett.us/let-go-lab/ on push to `main`. `scripts/build-pages.sh`
+assembles `_site/`: the index (`site/index.html` and its screenshots in
+`site/img/`), and per demo an offline single-file bundle + its own
+`coi-serviceworker.js`. Adding a browser demo means adding it to `DEMOS` there and
+in `test/pages_site_test.py`, and giving it a tile in `site/index.html`.
+`test/pages_site_test.py` gates the deploy. Pages can't send COOP/COEP, which the `SharedArrayBuffer` input
 ring needs, so `harness/coi-serviceworker.js` re-adds them and a `<head>`
 bootstrap (`harness/coi-bootstrap.html`, injected by `inject-coi.sh`) registers
 it and reloads once into the isolated context. Build locally with

@@ -68,12 +68,11 @@ The local server supplies the cross-origin isolation headers the runtime needs.
 
 ## GitHub Pages
 
-`scripts/build-pages.sh` assembles Mandelbrot at the site root and this sampler
-at `/microgpt/`. On a push to `main`, the Pages workflow publishes both to
-`https://mparrett.github.io/let-go-lab/`. A draft PR runs the browser checks but
-does not deploy; the sampler URL becomes available after merging:
+`scripts/build-pages.sh` assembles the lab's index and every browser demo,
+including this sampler at `/microgpt/`. On a push to `main`, the Pages workflow
+publishes the site:
 
-<https://mparrett.github.io/let-go-lab/microgpt/>
+<https://matt.parrett.us/let-go-lab/microgpt/>
 
 For a local Pages-style preview, from the repository root:
 

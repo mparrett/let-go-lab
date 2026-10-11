@@ -1,15 +1,18 @@
 name: pages
 
-# Build the mandelbrot demo and microgpt sampler, then deploy to GitHub Pages
-# (https://mparrett.github.io/let-go-lab/). The bundle is single-file + offline
-# (wasm + xterm inlined), with a COI service worker that re-adds COOP/COEP so the
-# SharedArrayBuffer input ring works on Pages, which can't set those headers.
+# Build the index and every browser demo, smoke-test the site, then deploy to
+# GitHub Pages (https://matt.parrett.us/let-go-lab/). Each demo is single-file +
+# offline (wasm + xterm inlined) in its own directory, with a COI service worker
+# that re-adds COOP/COEP so the SharedArrayBuffer input ring works on Pages,
+# which can't set those headers.
 #
 # Depends on the offline-bundle machinery (harness/inline-assets.sh + vendored
 # xterm, from the #9 work) being present on the deployed branch.
+# Pull requests build and smoke-test the site without deploying it.
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -17,10 +20,11 @@ permissions:
   pages: write
   id-token: write
 
-# One deploy at a time; don't cancel an in-flight deploy.
+# One deploy at a time; don't cancel an in-flight deploy. A PR's runs only
+# replace each other.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.ref) || 'pages' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The let-go release is pinned in config/let-go-release, shared with ci.yml (see
 # the bump process there). The lab never builds lg itself; it runs a stock
@@ -65,16 +69,28 @@ jobs:
       - name: Build Pages site
         run: scripts/build-pages.sh
 
+      - name: Install Playwright (chromium)
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Smoke-test the site (header-free, project subpath)
+        run: python3 test/pages_site_test.py _site
+
       - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
         with:
           enablement: true   # auto-enable Pages (Actions source) if not already
 
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: _site
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

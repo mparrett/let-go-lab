@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>let-go lab</title>
+<meta name="description" content="Experiments on let-go, a Clojure dialect on a Go bytecode VM: sixel graphics, path tracing and a tiny GPT, compiled to WebAssembly and running in your browser.">
+<script>
+  // Mandelbrot lived at the site root until the index replaced it; old
+  // start-view links (?x=…&zoom=…) still land on it.
+  if (location.search) location.replace("mandelbrot/" + location.search);
+</script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b0a; --tile: #141412; --line: #2a2a26; --ink: #ecebe4;
+    --muted: #9b9a90; --accent: #e0a458;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body { font: 16px/1.5 var(--sans); padding: 48px 16px 64px; }
+  main { max-width: 1120px; margin: 0 auto; }
+
+  header { margin-bottom: 32px; }
+  .kicker { font: 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin: 0 0 14px; }
+  h1 { font: 600 clamp(36px, 6vw, 60px)/1.02 var(--sans); letter-spacing: -.03em; margin: 0 0 14px; }
+  .lede { max-width: 62ch; color: var(--muted); margin: 0; }
+  .lede a, footer a { color: var(--ink); text-decoration-color: var(--line); text-underline-offset: 3px; }
+  .lede a:hover, footer a:hover { text-decoration-color: var(--accent); }
+  code { font: .9em var(--mono); color: var(--ink); }
+
+  .mosaic { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); grid-auto-rows: 250px; }
+  .tile {
+    position: relative; overflow: hidden; display: block;
+    background: var(--tile); border: 1px solid var(--line); border-radius: 10px;
+    color: inherit; text-decoration: none;
+  }
+  .tile.big { grid-column: span 2; grid-row: span 2; }
+  .tile img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform .4s ease, filter .4s ease; }
+  .tile img.anchor-bl { object-position: left bottom; }
+  .tile:hover img, .tile:focus-visible img { transform: scale(1.03); filter: brightness(1.08); }
+  .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .cap {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 40px 16px 14px;
+    background: linear-gradient(transparent, rgba(8, 8, 7, .92) 55%);
+  }
+  .cap h2 { font: 600 18px/1.2 var(--sans); margin: 0 0 4px; display: flex; align-items: baseline; gap: 10px; }
+  .big .cap h2 { font-size: 24px; }
+  .cap p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
+  .tag { font: 11px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+  .tag.native { color: var(--muted); }
+
+  .about { padding: 20px; display: flex; flex-direction: column; justify-content: space-between; }
+  .about p { margin: 0; color: var(--muted); font-size: 14px; }
+  .about .go { font: 13px var(--mono); color: var(--accent); }
+
+  footer { margin-top: 28px; font: 13px var(--mono); color: var(--muted); }
+
+  @media (max-width: 860px) {
+    .mosaic { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 220px; }
+  }
+  @media (max-width: 560px) {
+    body { padding-top: 32px; }
+    .mosaic { grid-template-columns: 1fr; grid-auto-rows: auto; }
+    .tile:not(.about) { height: 260px; }
+    .tile.big { grid-column: auto; grid-row: auto; }
+    .about { gap: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .tile img { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="kicker">let-go lab</p>
+    <h1>Lisp in the browser,<br>drawing pictures.</h1>
+    <p class="lede">Experiments on <a href="https://github.com/nooga/let-go">let-go</a>, a Clojure dialect
+      on a Go bytecode VM. Each demo below is a single <code>.lg</code> file compiled to
+      WebAssembly. It runs in your browser with no install, and the same file runs natively in a terminal.</p>
+  </header>
+
+  <section class="mosaic" aria-label="Demos">
+    <a class="tile big" href="mandelbrot/">
+      <img src="img/mandelbrot.jpg" alt="A zoomed region of the Mandelbrot set rendered as sixel graphics in a browser terminal">
+      <div class="cap">
+        <h2>mandelbrot <span class="tag">live</span></h2>
+        <p>Escape-time fractal as sixel graphics in xterm.js. Click to zoom, keys to pan, <code>,</code> <code>.</code> for detail.</p>
+      </div>
+    </a>
+    <a class="tile" href="pathtrace/">
+      <img src="img/pathtrace.jpg" alt="Three colored spheres under a soft area light, progressively path traced">
+      <div class="cap">
+        <h2>pathtrace <span class="tag">live</span></h2>
+        <p>Monte Carlo path tracer that encodes its own PNGs. Orbit with <code>hjkl</code>.</p>
+      </div>
+    </a>
+    <a class="tile" href="ptcanvas/">
+      <img src="img/ptcanvas.jpg" alt="A Cornell-box style scene path traced to a canvas">
+      <div class="cap">
+        <h2>ptcanvas <span class="tag">live</span></h2>
+        <p>Allocation-free path tracer drawing straight to a <code>&lt;canvas&gt;</code>.</p>
+      </div>
+    </a>
+    <a class="tile" href="microgpt/">
+      <img src="img/microgpt.jpg" alt="The microgpt page showing eight generated names">
+      <div class="cap">
+        <h2>microgpt <span class="tag">live</span></h2>
+        <p>Karpathy's scalar GPT in one let-go file, inventing names in your browser.</p>
+      </div>
+    </a>
+    <a class="tile" href="https://github.com/mparrett/let-go-lab/tree/main/demos/mandelbrot-aot">
+      <img class="anchor-bl" src="img/mandelbrot-aot.jpg" alt="An ASCII Mandelbrot zoom in a terminal from the AOT-compiled kernel, ending on a 130 frames-per-second summary">
+      <div class="cap">
+        <h2>mandelbrot-aot <span class="tag native">native</span></h2>
+        <p>The same kernel lowered to Go with <code>lg compile</code>: about 72× faster than the VM.</p>
+      </div>
+    </a>
+    <a class="tile about" href="https://github.com/mparrett/let-go-lab">
+      <p>Serve any demo locally with <code>just serve &lt;demo&gt;</code>; mandelbrot and pathtrace also run in a terminal with <code>just play &lt;demo&gt;</code>.
+        The audio, AOT and microgpt training experiments live in the repo.</p>
+      <span class="go">source on GitHub →</span>
+    </a>
+  </section>
+
+  <footer>
+    Built from <a href="https://github.com/mparrett/let-go-lab">mparrett/let-go-lab</a> with the let-go release it pins.
+  </footer>
+</main>
+</body>
+</html>
