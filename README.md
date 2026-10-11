@@ -4,9 +4,11 @@ Experiments on [let-go](https://github.com/nooga/let-go) — sixel graphics,
 terminal UI, wasm-in-the-browser — decoupled from any one client app.
 
 **▶ Live in your browser, no install** (let-go compiled to WASM):
-[mandelbrot](https://matt.parrett.us/let-go-lab/) in xterm.js ·
-[microgpt sampler](https://matt.parrett.us/let-go-lab/microgpt/). The other
-demos run locally with `just serve <demo>` or `just play <demo>`.
+every demo is on [the lab's index page](https://matt.parrett.us/let-go-lab/):
+[mandelbrot](https://matt.parrett.us/let-go-lab/mandelbrot/) ·
+[pathtrace](https://matt.parrett.us/let-go-lab/pathtrace/) ·
+[ptcanvas](https://matt.parrett.us/let-go-lab/ptcanvas/) ·
+[microgpt sampler](https://matt.parrett.us/let-go-lab/microgpt/).
 
 ![Mandelbrot sixel demo running in the browser via xterm.js](docs/img/mandelbrot-browser.png)
 
@@ -54,7 +56,7 @@ measurements, and compiler limitations.
   ![Mandelbrot demo zoomed in, running natively in iTerm2](docs/img/mandelbrot-native-zoom.png)
 
   A link or flags can set the starting view, e.g.
-  [`?x=-0.745&y=0.11&zoom=50`](https://matt.parrett.us/let-go-lab/?x=-0.745&y=0.11&zoom=50)
+  [`?x=-0.745&y=0.11&zoom=50`](https://matt.parrett.us/let-go-lab/mandelbrot/?x=-0.745&y=0.11&zoom=50)
   or `just play mandelbrot --zoom 50 --x -0.745 --y 0.11` (also `maxiter`).
 
 - **[pathtrace](demos/pathtrace)** — a small progressive Monte Carlo path tracer
