@@ -346,6 +346,44 @@
     (rendered-scale-cue scale)
     (term/flush)))
 
+;; In the browser the frame goes to a <canvas> through surface/present, one
+;; pixel per grid point (the page scales it up), and the status to the page
+;; through js/emit. No sixel is built, so there's no encode or emit phase.
+;; palette-rgb holds each register's colour as bytes, 3 per register, from the
+;; same cosine palette as palette-defs (which is in percent).
+(def palette-rgb
+  (let [t (make-array :int (* 3 (inc NPAL)))
+        b (fn [pct] (int (+ 0.5 (* 2.55 pct))))]
+    (loop [i 0]                                 ; register 0 stays black
+      (when (< i NPAL)
+        (let [f (/ (float i) (float NPAL)) o (* 3 (inc i))]
+          (aset t o (b (iq f 0.0)))
+          (aset t (+ o 1) (b (iq f 0.33)))
+          (aset t (+ o 2) (b (iq f 0.67))))
+        (recur (inc i))))
+    t))
+
+(defn render-canvas [cx cy vw mi]
+  (js/emit :busy {:on true})                   ; the page dims the old frame meanwhile
+  (let [t0 (inst-ms (now))
+        gi (compute-grid cx cy vw mi)
+        grid (first gi)
+        t1 (inst-ms (now))
+        n (* CW CH)
+        fb (make-array :byte (* 4 n))]
+    (loop [i 0]
+      (when (< i n)
+        (let [c (* 3 (nth grid i)) o (* 4 i)]
+          (aset fb o (aget palette-rgb c))
+          (aset fb (+ o 1) (aget palette-rgb (+ c 1)))
+          (aset fb (+ o 2) (aget palette-rgb (+ c 2)))
+          (aset fb (+ o 3) 255))
+        (recur (inc i))))
+    (surface/present fb CW CH)
+    (js/emit :status {:x (r5 cx) :y (r5 cy) :zoom (int (/ home-w vw)) :vw vw :maxiter mi
+                      :iters (second gi) :w CW :h CH
+                      :compute (- t1 t0) :present (- (inst-ms (now)) t1)})))
+
 ;; Arrow keys arrive as the 3-byte CSI sequence ESC [ A/B/C/D.
 (def up (str ESC "[A"))
 (def down (str ESC "[B"))
@@ -440,6 +478,20 @@
         img-cols (max 1 (- cols (dec COL0)))      ; full width minus the left margin
         img-rows (max 1 (- rows CHROME-ROWS))]
     (map-click cx cy vw mx my img-cols img-rows)))
+
+;; CANVAS path: the browser page draws the frame on a <canvas> and reports a
+;; click as an SGR mouse string whose x/y are 1-based positions on a grid
+;; click-res times finer than the coarse grid (640x480 for 160x120), so the
+;; mapping needs no terminal geometry at all. Returns [cx' cy'] or nil.
+(def click-res 4)
+(defn canvas-click->center [cx cy vw mx my]
+  (let [w (* CW click-res) h (* CH click-res)]
+    (when (and (<= 1 mx w) (<= 1 my h))
+      (let [vh (* vw (/ (float CH) (float CW)))
+            fx (/ (+ (float (dec mx)) 0.5) (float w))
+            fy (/ (+ (float (dec my)) 0.5) (float h))]
+        [(+ (- cx (/ vw 2.0)) (* fx vw))
+         (+ (- cy (/ vh 2.0)) (* fy vh))]))))
 
 ;; --- Native cell-size probe (issue #5) -------------------------------------
 ;; Mapping a NATIVE click needs the terminal's cell size in PIXELS: a sixel is
@@ -564,10 +616,10 @@
     (let [n (parse-int (subs k 1 2))]
       (when n (max scale-min (min scale-max n))))))
 
-(defn loop-keys [init-scale]
+(defn loop-keys [init-scale canvas?]
   (let [[x0 y0 w0 mi0] (start-view)]
     (loop [cx x0 cy y0 vw w0 mi mi0 scale init-scale]
-      (render cx cy vw mi scale)
+      (if canvas? (render-canvas cx cy vw mi) (render cx cy vw mi scale))
       (let [k (term/read-key)
             pan (* vw 0.2)
             me (mouse-event k)
@@ -597,10 +649,11 @@
           ;; native with no measurable cell size — is ignored, leaving keyboard
           ;; pan/zoom as the fallback.
           (and me (= (:action me) :press) (= (:button me) :left))
-          (let [c (if (:native me)
-                    (let [cell (cell-size)]
-                      (when cell (native-click->center cx cy vw (:x me) (:y me) cell)))
-                    (click->center cx cy vw (:x me) (:y me)))]
+          (let [c (cond
+                    (:native me) (let [cell (cell-size)]
+                                   (when cell (native-click->center cx cy vw (:x me) (:y me) cell)))
+                    canvas? (canvas-click->center cx cy vw (:x me) (:y me))
+                    :else (click->center cx cy vw (:x me) (:y me)))]
             (if c
               (let [px (first c) py (second c)
                     vh (* vw (/ (float CH) (float CW)))
@@ -672,15 +725,18 @@
   ;; term/size is nil only on a non-TTY native run (piped/redirected); under
   ;; wasm it always returns a value. So: interactive on a TTY (or wasm), and
   ;; the headless bench when piped — which is exactly the profiling invocation.
-  (if (nil? (term/size))
-    (run-bench)
-    (do
-      (setup!)
-      (try
-        (announce-geometry)
-        ;; Browser waits for the shell's fitted scale; native holds home-scale.
-        (loop-keys (if *in-wasm* (await-initial-scale) home-scale))
-        (finally (teardown!))))))
+  (cond
+    ;; Browser: the canvas page; no terminal, no sixel, no scale handshake.
+    (surface/available?) (loop-keys home-scale true)
+    (nil? (term/size)) (run-bench)
+    :else (do
+            (setup!)
+            (try
+              (announce-geometry)
+              ;; A browser without the surface seam waits for the shell's fitted
+              ;; scale; native holds home-scale.
+              (loop-keys (if *in-wasm* (await-initial-scale) home-scale) false)
+              (finally (teardown!))))))
 
 (when-not *compiling-aot*
   (-main))
