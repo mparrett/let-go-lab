@@ -16,20 +16,19 @@ all merged 2026-10-17.
 
 ## Measured 2026-10-18
 
-let-go `main` at `9981aa04`, Go 1.27.1, Apple M2, 1M `double-array`, 50 reps.
-Two passes of four interleaved rounds, the first round of each dropped as
-cold. Load was 6-9, so absolutes run about 20% above a quiet machine (the
-hand-Go row was 1.4-1.8 on 2026-10-10); the ratios held across both passes.
-These are indicative runs, not ratchet results.
+let-go `main` at `9981aa04`, Go 1.27.1, Apple M2, 1M `double-array`, 50 reps,
+five or six runs per row at load 5-6, no other timing jobs running. Ratios are
+the point; absolutes are this machine. These are indicative runs, not ratchet
+results. One `BenchmarkPlain` run at 1.28 was dropped as noise.
 
 | Variant | ms/rep | vs unhinted AOT |
 |---|---|---|
-| Bytecode VM (`lg -e "(require 'sum-arr) (sum-arr/-main)"`) | 125-187 | |
-| AOT, no hint (`rt.CoreAgetf`, `rt.AddValue`) | 50-76 | 1x |
-| Go, `arr.Get(i)` direct, still boxed (`BenchmarkGetBoxed`) | 19-22 | ~3x |
-| Go, kind asserted once, slice hoisted (`BenchmarkHoisted`) | 2.1-2.4 | ~30x |
-| Hand-written Go over `[]float64` (`BenchmarkPlain`) | 1.9-2.2 | ~30x |
-| AOT, `^doubles` (`sum_arr_doubles.lg`) | 1.8-2.7 | ~25-30x |
+| Bytecode VM (`lg -e "(require 'sum-arr) (sum-arr/-main)"`) | 67-83 | |
+| AOT, no hint (`rt.CoreAgetf`, `rt.AddValue`) | 28-30 | 1x |
+| Go, `arr.Get(i)` direct, still boxed (`BenchmarkGetBoxed`) | 7.4-8.4 | ~3.5x |
+| Go, kind asserted once, slice hoisted (`BenchmarkHoisted`) | 0.98-1.0 | ~29x |
+| Hand-written Go over `[]float64` (`BenchmarkPlain`) | 0.92-0.94 | ~30x |
+| AOT, `^doubles` (`sum_arr_doubles.lg`) | 0.96-1.01 | ~29x |
 
 The hinted kernel lands on the hand-written Go row. The VM row was 232-263 on
 2026-10-10 at `ff1e6dac`, before `OP_AGET`; the hint does not change it.
