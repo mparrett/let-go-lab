@@ -36,6 +36,8 @@ This optional build caches the audited let-go SHA from
 [`config/let-go-native.sha`](config/let-go-native.sha). Browser CI and Pages
 use the release pin. See [native builds](docs/native-builds.md) for requirements,
 measurements, and compiler limitations.
+[Profiling, October 2026](docs/profiling-2026-10.md) has where each demo spends its
+time natively and in the browser, with stock Go and TinyGo builds.
 
 ## Demos
 
