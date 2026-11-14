@@ -49,7 +49,9 @@ LGFILE="$SRC/$DEMO.lg"
 [[ -f "$LGFILE" ]]     || { echo "serve: no demo at $LGFILE" >&2; exit 1; }
 [[ -f "$SHELL_HTML" ]] || { echo "serve: no shell at $SHELL_HTML" >&2; exit 1; }
 [[ -x "$LG" ]]         || { echo "serve: no lg at $LG (set LETGO=<path-to-let-go>)" >&2; exit 1; }
-"$LG" -h 2>&1 | grep -q -- '-w-shell' || {
+# grep -q would exit at the first match and SIGPIPE lg mid-write, which pipefail
+# turns into an intermittently failed probe, so read the whole help text.
+"$LG" -h 2>&1 | grep -- '-w-shell' >/dev/null || {
   echo "serve: $LG predates -w-shell (#245); point LETGO at upstream main or later" >&2; exit 1; }
 
 mkdir -p "$DIST"
