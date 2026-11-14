@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Check full native demos against the VM: frame counts, PNG bytes, GPT weights.
+"""Check full native demos against the VM: frame counts, PNG bytes, render checksums, GPT weights.
 
 Usage: python3 test/native_demo_test.py --lg /path/to/pinned-let-go/bin/lg
        --letgo-src /path/to/pinned-let-go
-Build mandelbrot, pathtrace, and microgpt with scripts/build-native.sh first.
+Build mandelbrot, pathtrace, ptcanvas, and microgpt with scripts/build-native.sh first.
 """
 import argparse
 import os
@@ -88,6 +88,16 @@ def main():
         assert pngs[0].startswith(b"\x89PNG\r\n\x1a\n")
         assert pngs[0] == pngs[1], "native pathtrace PNG differs from VM"
         print("PASS: pathtrace: 32 samples/pixel, byte-identical PNG", flush=True)
+
+        # A piped run benchmarks both renderers; each prints the sum of its image as chk=.
+        checksums = []
+        for command in ([lg, LAB / "demos/ptcanvas/ptcanvas.lg"], [native / "ptcanvas"]):
+            found = re.findall(r"chk=(\d+)", run(command, temporary))
+            assert len(found) == 2, found
+            checksums.append(found)
+        assert checksums[0] == checksums[1], f"native ptcanvas differs from VM: {checksums}"
+        print(f"PASS: ptcanvas: scalar and vec3 checksums match ({', '.join(checksums[0])})",
+              flush=True)
 
         microgpt = LAB / "experiments/microgpt"
         vm = [lg, microgpt / "microgpt.lg"]

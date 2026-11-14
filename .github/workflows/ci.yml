@@ -87,6 +87,7 @@ jobs:
         run: |
           scripts/build-native.sh mandelbrot
           scripts/build-native.sh pathtrace
+          scripts/build-native.sh ptcanvas
           scripts/build-native.sh microgpt
 
       - name: Compare native demos with the VM

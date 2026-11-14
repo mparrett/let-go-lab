@@ -28,7 +28,7 @@ and how to add a demo.
 To compile a complete demo to a native executable:
 
 ```sh
-just native mandelbrot       # also: pathtrace, microgpt
+just native mandelbrot       # also: pathtrace, ptcanvas, microgpt
 dist/native/mandelbrot
 ```
 
