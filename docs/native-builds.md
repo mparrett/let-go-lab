@@ -42,9 +42,12 @@ cd experiments/microgpt
 ../../dist/native/microgpt 0 weights.txt
 ```
 
-## What changed
+## What changed at the previous pin (`49858bd`, 2026-10-09)
 
-The newer compiler's trampoline-result unboxing fix
+This section and [native-mandelbrot-results.json](native-mandelbrot-results.json)
+were measured at `49858bd` and not re-run for the current pin.
+
+That compiler's trampoline-result unboxing fix
 ([#1044](https://github.com/nooga/let-go/pull/1044)) lets the full Mandelbrot and
 pathtrace programs build without patching generated Go. The `^double` coordinate
 hints on **both** `escape` and its caller `compute-grid` keep Mandelbrot's hot
@@ -72,9 +75,9 @@ normal 32-sample workload and compares the actual PNG bytes, not timings.
 
 ## Checks and remaining limitations
 
-The native CI job builds all four executables, checks Mandelbrot's frame count,
+The native CI job builds every demo `scripts/build-native.sh` accepts, checks Mandelbrot's frame count,
 iteration counts and actual sixel bytes, compares pathtrace PNG bytes, compares
-ptcanvas's scalar and vec3 render checksums, and checks
+ptcanvas's scalar and vec3 checksums and a full RGBA frame, and checks
 microgpt's pretrained samples and all 4,192 weights after three training steps
 within a maximum absolute tolerance of `1e-12`.
 It also runs the existing microgpt comparison with Python. For a local check:
@@ -109,5 +112,5 @@ speed gain. New caller-module and `-import` features support custom Go packages;
 these demos do not need extra bindings.
 
 To update the native pin, choose a full upstream SHA, match CI's Go version to
-its go.mod, rebuild the four executables, and run the parity checks. Keep the
+its go.mod, rebuild every native demo, and run the parity checks. Keep the
 browser/Pages release pin as a separate decision.
