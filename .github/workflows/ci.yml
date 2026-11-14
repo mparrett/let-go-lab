@@ -24,7 +24,7 @@ on:
 # Held at v1.11.0 until 2026-09-19, the oldest release the demos supported, and
 # so the least likely to catch upstream drift — it did not: v1.12.0 renamed the
 # wasm host mount #terminal -> #app (#378) and both browser demos threw on load
-# for two minor versions with CI green. Prefer the newest release.
+# for two minor versions with CI green. Keep the pin recent.
 #
 # v1.13.0 validated 2026-09-19 (resolved SHA 369e2a69): demo builds, suite
 # passes, viewport_fit_test passes at phone-390 and desktop.

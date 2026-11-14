@@ -30,7 +30,7 @@ The browser and VM recipes run an existing lg. Point them at one of:
 
 The optional `just native <demo>` recipe builds and caches a separate upstream
 checkout pinned by `config/let-go-native.sha`. It does not change `LETGO` or the
-browser/Pages release pin. Set `LETGO_NATIVE=/path/to/checkout` to reuse a checkout
+browser/Pages pin (`config/let-go-browser.ref`). Set `LETGO_NATIVE=/path/to/checkout` to reuse a checkout
 of that exact SHA. Native builds and parity tests have a separate CI job; see
 [docs/native-builds.md](docs/native-builds.md) when updating the native pin.
 

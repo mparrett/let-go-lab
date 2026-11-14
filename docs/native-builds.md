@@ -106,11 +106,12 @@ open upstream limitations and remain in place.
 
 The new Go build tag `lg_no_json` drops unused JSON/Transit support. In the audit,
 it reduced Mandelbrot's standalone browser HTML by about 5%, but microgpt's by
-only 0.36% because its host-eval bridge retains JSON support. It is not enabled
-for Pages: the current release does not have it, and there is no measured model
-speed gain. New caller-module and `-import` features support custom Go packages;
+only 0.36% because its host-eval bridge retains JSON support. The browser pin
+has it since 2026-11-14, but Pages does not enable it yet: no one has measured
+it on the Pages build, and the audit found no model speed gain. New caller-module and `-import` features support custom Go packages;
 these demos do not need extra bindings.
 
 To update the native pin, choose a full upstream SHA, match CI's Go version to
-its go.mod, rebuild every native demo, and run the parity checks. Keep the
-browser/Pages release pin as a separate decision.
+its go.mod, rebuild every native demo, and run the parity checks. Move
+`config/let-go-browser.ref` to the same SHA and run `scripts/ci.sh` against it,
+so the browser and native demos stay on one let-go.

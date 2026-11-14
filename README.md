@@ -34,7 +34,7 @@ dist/native/mandelbrot
 
 This optional build caches the audited let-go SHA from
 [`config/let-go-native.sha`](config/let-go-native.sha). Browser CI and Pages
-use the release pin. See [native builds](docs/native-builds.md) for requirements,
+use [`config/let-go-browser.ref`](config/let-go-browser.ref). See [native builds](docs/native-builds.md) for requirements,
 measurements, and compiler limitations.
 
 ## Demos
