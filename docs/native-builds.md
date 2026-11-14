@@ -22,8 +22,8 @@ dist/native/pathtrace
 ```
 
 Builds verify the checkout's HEAD against the pin. `LETGO_NATIVE` is separate
-from the `LETGO` used by VM/browser recipes. Browser CI and Pages use the
-release in `config/let-go-release`; a separate native CI job uses the SHA pin.
+from the `LETGO` used by VM/browser recipes. Browser CI and Pages use
+`config/let-go-browser.ref`; a separate native CI job uses the SHA pin.
 
 Every invocation runs upstream's `make build`, including its smoke gates, even
 when `bin/lg` exists. Go's build cache avoids unchanged compilation, while the

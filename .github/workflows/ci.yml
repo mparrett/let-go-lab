@@ -10,12 +10,16 @@ on:
     branches: [main]
   pull_request:
 
-# The let-go RELEASE the browser smoke tests run against is pinned in
-# config/let-go-release, shared with pages.yml. That file is the one source of
-# truth for the supported let-go version: docs point at it rather than naming a
-# version, so a bump is a one-line change. The Go toolchain follows the pinned
-# let-go's go.mod. To bump: pick a newer tag, build + run `scripts/ci.sh`
-# against it locally, then edit the file.
+# The let-go the browser smoke tests run against is pinned in
+# config/let-go-browser.ref (a tag or a full SHA), shared with pages.yml. That
+# file is the one source of truth for the supported let-go version: docs point at
+# it rather than naming a version, so a bump is a one-line change. The Go
+# toolchain follows the pinned let-go's go.mod. To bump: pick a newer ref, build
+# + run `scripts/ci.sh` against it locally, then edit the file.
+#
+# Since 2026-11-14 it is a main SHA, not a release: this is a lab, and the demos
+# should use what let-go main can do. Move it together with
+# config/let-go-native.sha, so the browser and native demos are on one let-go.
 #
 # Held at v1.11.0 until 2026-09-19, the oldest release the demos supported, and
 # so the least likely to catch upstream drift — it did not: v1.12.0 renamed the
@@ -34,10 +38,10 @@ jobs:
 
       # Full clone (not --depth 1) so the pinned tag/SHA is fetchable. Cloned
       # before setup-go so the toolchain comes from the pinned go.mod.
-      - name: Fetch let-go (pinned release)
+      - name: Fetch let-go (pinned ref)
         run: |
           git clone https://github.com/nooga/let-go let-go-upstream
-          git -C let-go-upstream checkout "$(cat config/let-go-release)"
+          git -C let-go-upstream checkout "$(cat config/let-go-browser.ref)"
 
       - uses: actions/setup-go@v5
         with:
@@ -57,7 +61,7 @@ jobs:
           python -m playwright install --with-deps chromium
 
       # Build the pinned let-go and point LETGO at it.
-      - name: Build let-go (pinned release)
+      - name: Build let-go (pinned ref)
         run: |
           make -C let-go-upstream build
           ln -sfn "$PWD/let-go-upstream" let-go
@@ -82,7 +86,7 @@ jobs:
           python-version: '3.12'
 
       # The optional native compiler has its own full-SHA pin. Pages and the
-      # browser smoke job use config/let-go-release.
+      # browser smoke job use config/let-go-browser.ref.
       - name: Build native demos (SHA-pinned upstream)
         run: |
           scripts/build-native.sh mandelbrot

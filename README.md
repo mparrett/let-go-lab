@@ -20,8 +20,8 @@ just serve           # build + serve in the browser; open the printed URL
 ```
 
 Both default to the `mandelbrot` demo and to the lg in the symlinked checkout
-(`./let-go`) — use the let-go release pinned in
-[`config/let-go-release`](config/let-go-release). See
+(`./let-go`) — use the let-go commit pinned in
+[`config/let-go-browser.ref`](config/let-go-browser.ref). See
 [CLAUDE.md](CLAUDE.md) for the lg requirement, cert setup for LAN/phone serving,
 and how to add a demo.
 
