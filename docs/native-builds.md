@@ -1,13 +1,13 @@
 # Full native demo builds
 
-`just native mandelbrot`, `just native pathtrace`, and `just native microgpt`
-compile the existing `.lg` programs with `lg compile`. Executables and generated
+`just native mandelbrot`, `just native pathtrace`, `just native ptcanvas`, and
+`just native microgpt` compile the existing `.lg` programs with `lg compile`. Executables and generated
 Go live in `dist/native/`. These are complete programs; the separate
 `demos/mandelbrot-aot` experiment still uses a lowered kernel and a Go terminal
 driver.
 
 The native compiler is pinned by [`config/let-go-native.sha`](../config/let-go-native.sha)
-to `49858bd247e5277874d3f5bad80c57c756a074d6`. The first build fetches that SHA
+to `c0a93f0dbac14b593f1e1498649dcce990ad072d`. The first build fetches that SHA
 into `.cache/let-go-native/<sha>` and runs upstream's `make build`, including its
 smoke gates. It needs Git, Make, Go 1.27.1 or newer, and network access for the
 first runtime/module downloads. Microgpt also fetches its hash-checked reference
@@ -42,9 +42,12 @@ cd experiments/microgpt
 ../../dist/native/microgpt 0 weights.txt
 ```
 
-## What changed
+## What changed at the previous pin (`49858bd`, 2026-10-09)
 
-The newer compiler's trampoline-result unboxing fix
+This section and [native-mandelbrot-results.json](native-mandelbrot-results.json)
+were measured at `49858bd` and not re-run for the current pin.
+
+That compiler's trampoline-result unboxing fix
 ([#1044](https://github.com/nooga/let-go/pull/1044)) lets the full Mandelbrot and
 pathtrace programs build without patching generated Go. The `^double` coordinate
 hints on **both** `escape` and its caller `compute-grid` keep Mandelbrot's hot
@@ -72,8 +75,9 @@ normal 32-sample workload and compares the actual PNG bytes, not timings.
 
 ## Checks and remaining limitations
 
-The native CI job builds all three executables, checks Mandelbrot's frame count,
-iteration counts and actual sixel bytes, compares pathtrace PNG bytes, and checks
+The native CI job builds every demo `scripts/build-native.sh` accepts, checks Mandelbrot's frame count,
+iteration counts and actual sixel bytes, compares pathtrace PNG bytes, compares
+ptcanvas's scalar and vec3 checksums and a full RGBA frame, and checks
 microgpt's pretrained samples and all 4,192 weights after three training steps
 within a maximum absolute tolerance of `1e-12`.
 It also runs the existing microgpt comparison with Python. For a local check:
@@ -81,6 +85,7 @@ It also runs the existing microgpt comparison with Python. For a local check:
 ```sh
 scripts/build-native.sh mandelbrot
 scripts/build-native.sh pathtrace
+scripts/build-native.sh ptcanvas
 scripts/build-native.sh microgpt
 PIN=$(cat config/let-go-native.sha)
 python3 test/native_demo_test.py --lg ".cache/let-go-native/$PIN/bin/lg" \
@@ -91,8 +96,11 @@ When using `LETGO_NATIVE`, pass its binary with `--lg` and its checkout director
 with `--letgo-src`. The test refuses optimized Python execution because `-O`
 would disable its parity assertions.
 
-Ptcanvas remains a VM/browser demo: this compiler emits an invalid type assertion
-at two native closure call sites. Microgpt's explicit loops, type hints,
+Ptcanvas builds natively since this pin; the previous pin (`49858bd`) emitted an
+invalid type assertion at two native closure call sites. Natively it gains little
+on its alloc-free scalar path (2026-11-13, Apple M2: 3.9 s vs 4.1 s on the VM, against
+6.5 s vs 14.4 s for the allocating vec3 path): `radiance`'s coordinate params
+lower as `int64`, and the loop body stays boxed. Microgpt's explicit loops, type hints,
 plain-number inference branches, text weights, and profiling hook still address
 open upstream limitations and remain in place.
 
@@ -104,5 +112,5 @@ speed gain. New caller-module and `-import` features support custom Go packages;
 these demos do not need extra bindings.
 
 To update the native pin, choose a full upstream SHA, match CI's Go version to
-its go.mod, rebuild the three executables, and run the parity checks. Keep the
+its go.mod, rebuild every native demo, and run the parity checks. Keep the
 browser/Pages release pin as a separate decision.

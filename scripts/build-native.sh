@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Compile a full demo with the audited upstream SHA, without patching generated Go.
-# Usage: scripts/build-native.sh [mandelbrot|pathtrace|microgpt]
+# Usage: scripts/build-native.sh [mandelbrot|pathtrace|ptcanvas|microgpt]
 # LETGO_NATIVE selects an existing checkout of that SHA; otherwise cache one locally.
 set -euo pipefail
 LAB="$(cd "$(dirname "$0")/.." && pwd)"
 PIN=$(cat "$LAB/config/let-go-native.sha")
 DEMO=${1:-mandelbrot}
 case "$DEMO" in
-  mandelbrot|pathtrace|microgpt) ;;
-  *) echo "build-native: supported demos: mandelbrot, pathtrace, microgpt" >&2; exit 1 ;;
+  mandelbrot|pathtrace|ptcanvas|microgpt) ;;
+  *) echo "build-native: supported demos: mandelbrot, pathtrace, ptcanvas, microgpt" >&2; exit 1 ;;
 esac
 [[ "$PIN" =~ ^[0-9a-f]{40}$ ]] || { echo "build-native: invalid native SHA pin" >&2; exit 1; }
 RUNTIME=${LETGO_NATIVE:-$LAB/.cache/let-go-native/$PIN}
