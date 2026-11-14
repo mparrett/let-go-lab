@@ -418,22 +418,24 @@
   (term/restore-mode!))    ; no-op in wasm
 
 ;; Normalize one read-key result to a mouse event {:action :button :x :y …} or nil.
-;; read-key reports a mouse event two ways: NATIVE (#313 hybrid) returns a decoded
-;; map {:type :mouse :action … :button … :x :y :mods …} directly; WASM returns the
-;; raw SGR string "ESC[<b;x;y(M|m)" (its in-runtime decode is "Phase 3, not done").
+;; read-key reports a mouse event as a decoded map {:type :mouse :action … :button
+;; … :x :y :mods …}: natively since #313, and under wasm since nooga/let-go#1094.
+;; A wasm lg before #1094 (v1.13.0 and older) returns the raw SGR string
+;; "ESC[<b;x;y(M|m)" instead, so that form is still parsed.
 ;; The map? branch MUST come first — running subs/count on the native map (as an
 ;; earlier version did) throws, which on a TTY crashes mid-loop and leaves mouse
 ;; reporting on, leaking raw reports to the shell.
-;; :native marks how the event was delivered, which selects the click-mapping
-;; path: a MAP means native read-key (#313 hybrid) — a real terminal, where the
-;; image's cell extent is measured by a cell-size probe (see cell-size, issue
-;; #5) rather than known a priori. A STRING means wasm, where the browser shell
-;; content-sizes the terminal so the cell-span IS known exactly (= rows −
-;; CHROME-ROWS). loop-keys branches on :native to pick the right mapper.
+;; :native selects the click-mapping path. Natively the image's cell extent is
+;; measured by a cell-size probe (see cell-size, issue #5) rather than known a
+;; priori; in the browser the shell content-sizes the terminal so the cell-span
+;; IS known exactly (= rows − CHROME-ROWS). It comes from *in-wasm*, not from the
+;; event's shape: once wasm also delivered maps, keying it on map? sent every
+;; browser click down the native path, where it was dropped.
+;; loop-keys branches on :native to pick the right mapper.
 (defn mouse-event [k]
   (cond
     (map? k) (when (= (:type k) :mouse)
-               (assoc k :native true
+               (assoc k :native (not *in-wasm*)
                         :shift (and (:mods k) (contains? (:mods k) :shift) true)))
     (and (string? k) (>= (count k) 6) (= (subs k 0 3) (str ESC "[<")))
     (let [n (count k)
@@ -512,8 +514,8 @@
 ;;     keyboard-only instead of blocking forever.
 ;; The result is cached; a SIGWINCH (surfaced by read-key as BEL) invalidates it
 ;; so a terminal/font resize re-probes. WASM never reaches any of this: its
-;; clicks arrive as SGR strings (:native false → click->center), not the native
-;; map, so the bundle never shells out or consumes input to measure.
+;; clicks are marked :native false (→ click->center), so the bundle never
+;; shells out or consumes input to measure.
 (def probe-deadline-ms 120)
 (def probe-poll-ms 8)
 
