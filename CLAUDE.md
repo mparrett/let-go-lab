@@ -30,15 +30,18 @@ The browser and VM recipes run an existing lg. Point them at one of:
 
 The optional `just native <demo>` recipe builds and caches a separate upstream
 checkout pinned by `config/let-go-native.sha`. It does not change `LETGO` or the
-browser/Pages release pin. Set `LETGO_NATIVE=/path/to/checkout` to reuse a checkout
+browser/Pages pin (`config/let-go-browser.ref`). Set `LETGO_NATIVE=/path/to/checkout` to reuse a checkout
 of that exact SHA. Native builds and parity tests have a separate CI job; see
 [docs/native-builds.md](docs/native-builds.md) when updating the native pin.
 
-**The supported let-go is the release in `config/let-go-release`.** Browser CI
-and Pages build exactly that tag, and it is the only version the demos are
-tested against — there is no separate, older floor. Docs point at the file
+**The supported let-go is the ref in `config/let-go-browser.ref`.** Browser CI
+and Pages build exactly that ref, and it is the only version the demos are
+tested against — there is no separate, older floor. It may be a release tag
+or a full let-go `main` SHA; since 2026-11-14 it is a `main` SHA, so the lab
+uses what let-go can do before it is released. Bump it together with
+`config/let-go-native.sha`. Docs point at the file
 rather than naming a version, so a bump is a one-line change; CI takes the Go
-toolchain from that release's `go.mod`. Keep it at a recent release: holding CI
+toolchain from that ref's `go.mod`. Keep it recent: holding CI
 at the oldest supported version is what let nooga/let-go#378 (wasm host mount
 `#terminal` → `#app`, v1.12.0) break both browser demos for two minor versions
 with CI green. A newer `main` usually works too. The build path feature-probes

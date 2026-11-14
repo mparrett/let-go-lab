@@ -32,7 +32,9 @@ OUT="${1:-$LAB/_site}"
 DEMOS=(mandelbrot mandelbrot-sixel pathtrace ptcanvas)
 
 [[ -x "$LG" ]] || { echo "build-pages: no lg at $LG (set LETGO=<path>)" >&2; exit 1; }
-"$LG" -h 2>&1 | grep -q -- '-w-shell' || {
+# grep -q would exit at the first match and SIGPIPE lg mid-write, which pipefail
+# turns into an intermittently failed probe, so read the whole help text.
+"$LG" -h 2>&1 | grep -- '-w-shell' >/dev/null || {
   echo "build-pages: $LG predates -w-shell (#245); point LETGO at upstream main or later" >&2; exit 1; }
 
 RESOLVED_SHELL="$(mktemp "${TMPDIR:-/tmp}/lg-shell-XXXXXX")"
