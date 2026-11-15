@@ -16,12 +16,14 @@ Reads the coords row via the shell's __lgReadLine test hook. Requires the
 playwright pip package and a chromium install (PLAYWRIGHT_BROWSERS_PATH).
 """
 import re
+from urllib.parse import urlsplit, urlunsplit
 import sys
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8250/"
 # Renders are slow (compute + band-streamed emit ≈ 10s under headless/CI load), so
 # everything is poll-based with generous budgets rather than fixed sleeps.
 SETTLE_TIMEOUT = 40000   # a frame to finish (bottom status written) — boot or post-click
+RACE_VIEW = "x=-0.745&y=0.11&zoom=50&maxiter=128"
 RACE_TIMEOUT = 150000    # the resize race converges through ~3 sequential renders
 
 
@@ -69,17 +71,27 @@ def wait_settled(pg, timeout=SETTLE_TIMEOUT):
     return None
 
 
-def new_page(p, w, h):
+def with_query(url, query):
+    """Append query (no leading '?') to url, after any query it already has."""
+    if not query:
+        return url
+    parts = urlsplit(url)
+    joined = f"{parts.query}&{query}" if parts.query else query
+    return urlunsplit(parts._replace(query=joined))
+
+
+def new_page(p, w, h, query=""):
     """Launch a chromium page at the given viewport with error capture wired and
-    the document loaded. Returns (page, errs); errs accumulates pageerror +
-    console-error text for the caller to assert on."""
+    the document loaded (URL plus an optional query string). Returns (page,
+    errs); errs accumulates pageerror + console-error text for the caller to
+    assert on."""
     # Headless Chromium hides scrollbars by default; draw them so a classic
     # scrollbar over the terminal shows up as a measurable gutter.
     pg = p.chromium.launch(ignore_default_args=["--hide-scrollbars"]).new_context(viewport={"width": w, "height": h}).new_page()
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
-    pg.goto(URL, wait_until="networkidle", timeout=30000)
+    pg.goto(with_query(URL, query), wait_until="networkidle", timeout=30000)
     return pg, errs
 
 
@@ -183,7 +195,11 @@ def check_resize_race(p):
     fillers collapse into one read rather than one render apiece.)
     """
     fails = []
-    pg, errs = new_page(p, 1280, 900)
+    # The fill below needs a render still running ~800 ms after '+'. The home view
+    # stopped being that slow once interior? skipped the cardioid, so start in
+    # Seahorse Valley, where nearly every point runs escape: about 1.2x the
+    # iterations the home view cost before that change.
+    pg, errs = new_page(p, 1280, 900, RACE_VIEW)
     start = wait_settled(pg)   # parked at read-key, ring empty
     if start != 3:
         fails.append(f"race: expected initial rendered scale 3, got {start}")

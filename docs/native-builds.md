@@ -64,7 +64,9 @@ On Apple M2 / macOS 26.7.1 / Go 1.27.1, three interleaved native runs of the
 | Compute per frame | 107 ms | 8 ms |
 | Sixel encoding per frame | 55 ms | 55 ms |
 
-All frames retained `450584` iterations and `27695` encoded bytes. These are
+All frames retained `450584` iterations and `27695` encoded bytes. (Since #59,
+2026-11-14, the demo skips cardioid and bulb points and counts `120824` for the
+same frame, so these timings predate that.) These are
 local workload measurements, not universal performance promises. Run results are
 in [native-mandelbrot-results.json](native-mandelbrot-results.json).
 

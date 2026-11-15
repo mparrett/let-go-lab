@@ -30,7 +30,8 @@
 (defn now-ms [] (System/currentTimeMillis))
 
 ;; --- Render parameters ---------------------------------------------------
-;; SPEED LEVER: the cost is one escape() call per *computed* pixel. We compute
+;; SPEED LEVER: the cost is one escape() call per *computed* pixel that
+;; interior? doesn't settle in closed form. We compute
 ;; a coarse CW×CH grid, then upscale each computed pixel into a SCALE×SCALE
 ;; block of sixel pixels — so the on-screen image is (CW·SCALE)×(CH·SCALE) but
 ;; only CW·CH points are iterated. Cost ∝ 1/SCALE²: SCALE=2 is ~4× faster than
@@ -147,6 +148,17 @@
                (+ (* 2.0 (* zx zy)) cy)
                (inc i))))))
 
+;; Points in the main cardioid or the period-2 bulb never escape, so they would
+;; run all mi iterations; at the home view that is 73% of a frame's work. This
+;; closed form decides them up front. Hinted like escape (#551).
+(defn interior? [^double cx ^double cy]
+  (let [x (- cx 0.25)
+        y2 (* cy cy)
+        q (+ (* x x) y2)
+        x1 (+ cx 1.0)]
+    (or (<= (* q (+ q x)) (* 0.25 y2))
+        (<= (+ (* x1 x1) y2) 0.0625))))
+
 ;; Multiply before the mod so colors cycle several times across the escape
 ;; range — vivid contour bands instead of one washed-out ramp.
 (defn color-index [iters mi]
@@ -154,9 +166,10 @@
 
 ;; --- Coarse palette grid: CW×CH color indices (row-major, coarse pixel
 ;; (i,j) at j*CW + i), computed once per frame. This is the expensive part —
-;; CW·CH escape() calls. Returns [grid total-iters]; the iter sum (threaded,
-;; not via an atom, so it doesn't distort timing) is the VM-throughput
-;; numerator (iters/sec). `left`/`top`/`cstep` describe the current view.
+;; CW·CH escape() calls, less the points interior? settles. Returns [grid
+;; total-iters]; the iter sum (threaded, not via an atom, so it doesn't distort
+;; timing) counts only iterations escape ran, so it stays an honest
+;; VM-throughput numerator (iters/sec). `left`/`top`/`cstep` describe the current view.
 (defn compute-grid [^double cx ^double cy vw mi]
   (let [cstep (/ vw (float CW))
         left  (- cx (/ vw 2.0))
@@ -168,8 +181,11 @@
               row (loop [i 0 a acc s sum]
                     (if (>= i CW)
                       [a s]
-                      (let [it (escape (+ left (* (float i) cstep)) im mi)]
-                        (recur (inc i) (conj a (color-index it mi)) (+ s it)))))]
+                      (let [re (+ left (* (float i) cstep))]
+                        (if (interior? re im)
+                          (recur (inc i) (conj a 0) s)
+                          (let [it (escape re im mi)]
+                            (recur (inc i) (conj a (color-index it mi)) (+ s it)))))))]
           (recur (inc j) (first row) (second row)))))))
 
 ;; `m` is the raw mask (0..63); sixchar runs here, once per emitted run, rather
