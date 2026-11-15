@@ -16,13 +16,14 @@ Reads the coords row via the shell's __lgReadLine test hook. Requires the
 playwright pip package and a chromium install (PLAYWRIGHT_BROWSERS_PATH).
 """
 import re
+from urllib.parse import urlsplit, urlunsplit
 import sys
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8250/"
 # Renders are slow (compute + band-streamed emit ≈ 10s under headless/CI load), so
 # everything is poll-based with generous budgets rather than fixed sleeps.
 SETTLE_TIMEOUT = 40000   # a frame to finish (bottom status written) — boot or post-click
-RACE_VIEW = "?x=-0.745&y=0.11&zoom=50&maxiter=128"
+RACE_VIEW = "x=-0.745&y=0.11&zoom=50&maxiter=128"
 RACE_TIMEOUT = 150000    # the resize race converges through ~3 sequential renders
 
 
@@ -70,6 +71,15 @@ def wait_settled(pg, timeout=SETTLE_TIMEOUT):
     return None
 
 
+def with_query(url, query):
+    """Append query (no leading '?') to url, after any query it already has."""
+    if not query:
+        return url
+    parts = urlsplit(url)
+    joined = f"{parts.query}&{query}" if parts.query else query
+    return urlunsplit(parts._replace(query=joined))
+
+
 def new_page(p, w, h, query=""):
     """Launch a chromium page at the given viewport with error capture wired and
     the document loaded (URL plus an optional query string). Returns (page,
@@ -81,7 +91,7 @@ def new_page(p, w, h, query=""):
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
-    pg.goto(URL + query, wait_until="networkidle", timeout=30000)
+    pg.goto(with_query(URL, query), wait_until="networkidle", timeout=30000)
     return pg, errs
 
 

@@ -119,7 +119,8 @@ inferred `cx`/`cy` as `int` and emitted non-compiling `float64 + int` Go — is 
 
 - AOT targets native Go, so this speeds the **native** demo, not the
   browser/WASM build (which runs on the VM).
-- The port's iteration sum (450174) differs from the demo's (450584) by ~0.09%:
+- The port's iteration sum (450174) differs from the demo's (450584, its count
+  before the demo started skipping cardioid and bulb points in #59) by ~0.09%:
   the demo's coordinate setup uses Clojure-style single-precision `(float …)`
   while the port is float64, flipping a handful of escape-boundary pixels. Output
   stays byte-equivalent (27794 vs 27695).

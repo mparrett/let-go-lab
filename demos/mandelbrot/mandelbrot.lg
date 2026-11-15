@@ -30,7 +30,8 @@
 (defn now-ms [] (System/currentTimeMillis))
 
 ;; --- Render parameters ---------------------------------------------------
-;; SPEED LEVER: the cost is one escape() call per *computed* pixel. We compute
+;; SPEED LEVER: the cost is one escape() call per *computed* pixel that
+;; interior? doesn't settle in closed form. We compute
 ;; a coarse CW×CH grid, then upscale each computed pixel into a SCALE×SCALE
 ;; block of sixel pixels — so the on-screen image is (CW·SCALE)×(CH·SCALE) but
 ;; only CW·CH points are iterated. Cost ∝ 1/SCALE²: SCALE=2 is ~4× faster than

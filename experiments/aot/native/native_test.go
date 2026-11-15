@@ -5,7 +5,9 @@ import "testing"
 // Sanity bound, not exact: the demo's coordinate setup uses Clojure-style
 // single-precision (float ...) while this port is float64, so a handful of
 // escape-boundary pixels differ (~0.09%). Same work; assert within 1% of the
-// demo's sum=450584 / bytes=27695.
+// demo's sum=450584 / bytes=27695. That sum is the demo's count before it
+// skipped cardioid and bulb points (let-go-lab#59, 2026-11-14); the demo now
+// reports 120824, but this port, like its kernel, still iterates every point.
 func TestFrameMatchesDemo(t *testing.T) {
 	grid, sum := computeGrid(homeX, homeY, homeW, 96)
 	s := encodeFrame(grid)
