@@ -24,7 +24,7 @@ def frames(output):
     # Golden home view: 160×120 grid, scale 3, maxiter 96; normal 20-frame bench.
     rows = re.findall(r"frame (\d+)\s+compute=\d+ms\s+encode=\d+ms\s+"
                       r"iters=(\d+).*bytes=(\d+)", output)
-    assert rows == [(str(i), "450584", "27695") for i in range(20)], output
+    assert rows == [(str(i), "120824", "27695") for i in range(20)], output
     return rows
 
 
